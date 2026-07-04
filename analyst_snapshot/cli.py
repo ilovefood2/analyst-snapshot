@@ -5,6 +5,12 @@ from pathlib import Path
 
 from analyst_snapshot.config import load_config
 from analyst_snapshot.datasets import parse_dataset_codes
+from analyst_snapshot.dropbox_sync import (
+    authorization_url,
+    exchange_authorization_code,
+    load_dropbox_secrets,
+    upload_directory,
+)
 from analyst_snapshot.logging_utils import JsonlLogger
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
 from analyst_snapshot.storage import compact_rating_events
@@ -24,6 +30,14 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("verify")
     subparsers.add_parser("compact")
+    subparsers.add_parser("dropbox-auth-url")
+
+    dropbox_exchange_parser = subparsers.add_parser("dropbox-exchange-code")
+    dropbox_exchange_parser.add_argument("--code", required=True)
+
+    upload_dropbox_parser = subparsers.add_parser("upload-dropbox")
+    upload_dropbox_parser.add_argument("--local-dir", default=None)
+    upload_dropbox_parser.add_argument("--remote-root", default=None)
 
     should_run_parser = subparsers.add_parser("should-run")
     should_run_parser.add_argument("--as-of-date", help="New York calendar date, YYYY-MM-DD.")
@@ -45,6 +59,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = load_config()
+
+    if args.command == "dropbox-auth-url":
+        secrets = load_dropbox_secrets(require_refresh_token=False, require_app_secret=False)
+        print(authorization_url(secrets.app_key))
+        return 0
+
+    if args.command == "dropbox-exchange-code":
+        secrets = load_dropbox_secrets(require_refresh_token=False)
+        refresh_token = exchange_authorization_code(secrets, args.code)
+        print(refresh_token)
+        return 0
+
+    if args.command == "upload-dropbox":
+        local_dir = Path(args.local_dir) if args.local_dir else config.snapshot_dir
+        remote_root = args.remote_root or config.dropbox_remote_root
+        count = upload_directory(local_dir, remote_root, load_dropbox_secrets())
+        print(f"dropbox_uploaded_files={count}")
+        return 0
+
     logger = JsonlLogger(config.logs_dir, run_id())
 
     if args.command == "run":

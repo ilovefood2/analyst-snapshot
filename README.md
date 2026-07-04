@@ -68,6 +68,7 @@ SNAPSHOT_DIR=./archive
 UNIVERSE_FILE=./universe.txt
 SYMBOL_DELAY_SECONDS=0.5
 LOG_DIR=./logs
+DROPBOX_REMOTE_ROOT=/analyst-snapshot
 ```
 
 `UNIVERSE_FILE` should contain one ticker per line. Blank lines and `#` comments are ignored.
@@ -163,6 +164,55 @@ Because the repo is private, GitHub Actions usage counts against your account's 
 repo minutes. The storage approach is intentionally simple and free to start, but if the archive
 grows beyond what is comfortable in Git, move `archive/` to object storage such as Cloudflare R2,
 Backblaze B2, or S3-compatible storage and keep this workflow as the scheduler.
+
+## Dropbox Backup
+
+The GitHub Actions workflow can also upload `archive/` to Dropbox after `verify`.
+
+Create a Dropbox app in the Dropbox App Console:
+
+- Choose `Scoped access`.
+- Choose `App folder`.
+- Enable the `files.content.write` permission.
+
+Set these GitHub Actions secrets:
+
+```text
+DROPBOX_APP_KEY
+DROPBOX_APP_SECRET
+DROPBOX_REFRESH_TOKEN
+```
+
+Dropbox does not show a refresh token directly in the app console. Generate one with the app:
+
+```bash
+export DROPBOX_APP_KEY=your_app_key
+export DROPBOX_APP_SECRET=your_app_secret
+python -m analyst_snapshot dropbox-auth-url
+```
+
+Open the printed URL, approve the app, copy the authorization code, then exchange it:
+
+```bash
+python -m analyst_snapshot dropbox-exchange-code --code CODE_FROM_DROPBOX
+```
+
+Store the printed refresh token as the `DROPBOX_REFRESH_TOKEN` GitHub secret.
+
+To test upload locally:
+
+```bash
+export DROPBOX_REFRESH_TOKEN=your_refresh_token
+python -m analyst_snapshot upload-dropbox
+```
+
+By default, Dropbox files are uploaded under:
+
+```text
+/analyst-snapshot/archive/...
+```
+
+For an App Folder Dropbox app, that path is relative to the app's own Dropbox folder.
 
 ## Scheduling on macOS
 
