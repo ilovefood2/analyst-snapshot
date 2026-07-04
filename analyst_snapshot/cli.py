@@ -8,6 +8,7 @@ from analyst_snapshot.datasets import parse_dataset_codes
 from analyst_snapshot.logging_utils import JsonlLogger
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
 from analyst_snapshot.storage import compact_rating_events
+from analyst_snapshot.trading_calendar import print_should_run_report
 from analyst_snapshot.verify import print_coverage_report
 from analyst_snapshot.yahoo import YahooAnalystFetcher
 
@@ -24,15 +25,27 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("verify")
     subparsers.add_parser("compact")
 
+    should_run_parser = subparsers.add_parser("should-run")
+    should_run_parser.add_argument("--as-of-date", help="New York calendar date, YYYY-MM-DD.")
+    should_run_parser.add_argument(
+        "--github-output",
+        help="Path from GitHub Actions GITHUB_OUTPUT.",
+    )
+    should_run_parser.add_argument("--force", action="store_true")
+
     args = parser.parse_args(argv)
 
     if args.command == "verify":
         config = load_config()
-        print_coverage_report(config.snapshot_dir, config.universe_file)
+        print_coverage_report(config.snapshot_dir, config.universe_file, config.logs_dir)
+        return 0
+
+    if args.command == "should-run":
+        print_should_run_report(args.as_of_date, args.github_output, args.force)
         return 0
 
     config = load_config()
-    logger = JsonlLogger(config.snapshot_dir / "logs", run_id())
+    logger = JsonlLogger(config.logs_dir, run_id())
 
     if args.command == "run":
         symbols = _symbols_from_args(args.symbols, config.universe_file)

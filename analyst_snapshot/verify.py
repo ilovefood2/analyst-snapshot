@@ -10,7 +10,7 @@ from analyst_snapshot.runner import read_universe
 from analyst_snapshot.storage import read_parquet_or_empty
 
 
-def coverage_report(snapshot_dir: Path, universe_file: Path) -> dict[str, Any]:
+def coverage_report(snapshot_dir: Path, universe_file: Path, logs_dir: Path) -> dict[str, Any]:
     universe = read_universe(universe_file) if universe_file.exists() else []
     expected = set(universe)
     today = date.today()
@@ -43,12 +43,18 @@ def coverage_report(snapshot_dir: Path, universe_file: Path) -> dict[str, Any]:
             "path": str(today_path),
         }
 
-    report["failures"] = _recent_failures(snapshot_dir / "logs")
+    report["failures"] = _recent_failures(logs_dir)
     return report
 
 
-def print_coverage_report(snapshot_dir: Path, universe_file: Path) -> None:
-    print(json.dumps(coverage_report(snapshot_dir, universe_file), indent=2, sort_keys=True))
+def print_coverage_report(snapshot_dir: Path, universe_file: Path, logs_dir: Path) -> None:
+    print(
+        json.dumps(
+            coverage_report(snapshot_dir, universe_file, logs_dir),
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 def _recent_failures(logs_dir: Path) -> list[dict[str, Any]]:

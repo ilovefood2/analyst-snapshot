@@ -67,6 +67,7 @@ Optional settings:
 SNAPSHOT_DIR=./archive
 UNIVERSE_FILE=./universe.txt
 SYMBOL_DELAY_SECONDS=0.5
+LOG_DIR=./logs
 ```
 
 `UNIVERSE_FILE` should contain one ticker per line. Blank lines and `#` comments are ignored.
@@ -104,6 +105,21 @@ symbols, retries throttle-like failures with exponential backoff, pauses for 60 
 after repeated failures, isolates per-symbol failures, and retries failed symbols once at the end.
 A full run of about 1,330 symbols should take roughly 45 to 90 minutes depending on Yahoo behavior.
 
+Check whether the cloud scheduler should run today:
+
+```bash
+python -m analyst_snapshot should-run
+```
+
+For a specific New York calendar date:
+
+```bash
+python -m analyst_snapshot should-run --as-of-date 2026-06-06
+```
+
+This returns `run=true` when the previous New York calendar date was an NYSE trading day. For
+example, if Friday was a trading day, the Saturday morning run proceeds.
+
 ## Verify
 
 Report today coverage versus the universe, yesterday comparison rows, recent failures, and symbols
@@ -125,6 +141,28 @@ python -m analyst_snapshot compact
 ```
 
 Daily snapshot partitions are not compacted or rewritten.
+
+## Free Cloud Schedule
+
+The repository includes `.github/workflows/daily-snapshot.yml`, which deploys the job to GitHub
+Actions.
+
+What it does:
+
+- Runs every day at 12:00 UTC, which is morning in New York in both EST and EDT.
+- Uses the NYSE calendar to check whether yesterday was a trading day.
+- Runs `python -m analyst_snapshot run --resume` only when yesterday was a trading day.
+- Commits new files under `archive/` back to the repo so the point-in-time Parquet history survives
+  the ephemeral cloud runner.
+- Supports manual runs from GitHub Actions with optional `force=true` and optional
+  comma-separated `symbols` for smoke tests.
+
+The workflow uses the built-in `GITHUB_TOKEN`; no Yahoo API key or cloud secret is required.
+
+Because the repo is private, GitHub Actions usage counts against your account's included private
+repo minutes. The storage approach is intentionally simple and free to start, but if the archive
+grows beyond what is comfortable in Git, move `archive/` to object storage such as Cloudflare R2,
+Backblaze B2, or S3-compatible storage and keep this workflow as the scheduler.
 
 ## Scheduling on macOS
 

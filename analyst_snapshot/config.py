@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 class Config:
     snapshot_dir: Path
     universe_file: Path
+    logs_dir: Path
     symbol_delay_seconds: float
 
 
@@ -19,5 +20,6 @@ def load_config() -> Config:
     return Config(
         snapshot_dir=Path(os.getenv("SNAPSHOT_DIR", "./archive")),
         universe_file=Path(os.getenv("UNIVERSE_FILE", "./universe.txt")),
+        logs_dir=Path(os.getenv("LOG_DIR", "./logs")),
         symbol_delay_seconds=float(os.getenv("SYMBOL_DELAY_SECONDS", "0.5")),
     )

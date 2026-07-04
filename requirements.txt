@@ -1,4 +1,5 @@
 yfinance>=0.2.50
+pandas-market-calendars
 pandas
 pyarrow
 python-dotenv
