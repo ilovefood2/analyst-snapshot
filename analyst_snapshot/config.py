@@ -1,0 +1,23 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+@dataclass(frozen=True)
+class Config:
+    snapshot_dir: Path
+    universe_file: Path
+    symbol_delay_seconds: float
+
+
+def load_config() -> Config:
+    load_dotenv()
+    return Config(
+        snapshot_dir=Path(os.getenv("SNAPSHOT_DIR", "./archive")),
+        universe_file=Path(os.getenv("UNIVERSE_FILE", "./universe.txt")),
+        symbol_delay_seconds=float(os.getenv("SYMBOL_DELAY_SECONDS", "0.5")),
+    )

@@ -1,0 +1,15 @@
+[project]
+name = "analyst-snapshot"
+version = "0.1.0"
+description = "Daily point-in-time snapshots of FMP analyst data for ML research."
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

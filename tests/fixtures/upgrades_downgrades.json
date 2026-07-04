@@ -1,0 +1,16 @@
+[
+  {
+    "date": "2026-07-01",
+    "firm": "Example Bank",
+    "fromGrade": "Hold",
+    "toGrade": "Buy",
+    "action": "up"
+  },
+  {
+    "date": "2026-06-15",
+    "firm": "Sample Securities",
+    "fromGrade": "Buy",
+    "toGrade": "Hold",
+    "action": "down"
+  }
+]

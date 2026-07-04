@@ -1,0 +1,34 @@
+{
+  "earnings_estimate": [
+    {
+      "period": "0q",
+      "avg": 1.52,
+      "low": 1.4,
+      "high": 1.68,
+      "yearAgoEps": 1.35
+    }
+  ],
+  "revenue_estimate": [
+    {
+      "period": "0q",
+      "avg": 91000000000,
+      "low": 88000000000,
+      "high": 94000000000
+    }
+  ],
+  "eps_trend": [
+    {
+      "period": "0q",
+      "current": 1.52,
+      "7daysAgo": 1.5,
+      "30daysAgo": 1.48
+    }
+  ],
+  "eps_revisions": [
+    {
+      "period": "0q",
+      "upLast7days": 2,
+      "downLast7days": 1
+    }
+  ]
+}
