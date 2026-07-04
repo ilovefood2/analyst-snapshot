@@ -1,0 +1,92 @@
+name: Daily analyst snapshot
+
+on:
+  schedule:
+    # 12:00 UTC is morning in New York in both EST and EDT.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even if yesterday was not an NYSE trading day"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      symbols:
+        description: "Optional comma-separated symbols for a manual smoke run"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-analyst-snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      SNAPSHOT_DIR: ./archive
+      UNIVERSE_FILE: ./universe.txt
+      LOG_DIR: ./logs
+      SYMBOL_DELAY_SECONDS: "0.5"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Decide whether to run
+        id: calendar
+        env:
+          FORCE_RUN: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          force_arg=""
+          if [ "$FORCE_RUN" = "true" ]; then
+            force_arg="--force"
+          fi
+          python -m analyst_snapshot should-run --github-output "$GITHUB_OUTPUT" $force_arg
+
+      - name: Run analyst snapshot
+        if: steps.calendar.outputs.run == 'true'
+        env:
+          SYMBOLS: ${{ github.event.inputs.symbols || '' }}
+        run: |
+          if [ -n "$SYMBOLS" ]; then
+            python -m analyst_snapshot run --resume --symbols "$SYMBOLS"
+          else
+            python -m analyst_snapshot run --resume
+          fi
+
+      - name: Verify snapshot
+        if: steps.calendar.outputs.run == 'true'
+        run: python -m analyst_snapshot verify
+
+      - name: Commit archive updates
+        if: steps.calendar.outputs.run == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add archive
+          if git diff --cached --quiet; then
+            echo "No archive changes to commit."
+          else
+            git commit -m "Archive analyst snapshot for ${{ steps.calendar.outputs.trading_date }}"
+            git push
+          fi
