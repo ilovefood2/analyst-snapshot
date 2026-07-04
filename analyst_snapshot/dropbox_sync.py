@@ -102,9 +102,13 @@ def upload_directory(local_dir: Path, remote_root: str, secrets: DropboxSecrets)
 
 
 def remote_path_for_file(local_dir: Path, file_path: Path, remote_root: str) -> str:
-    relative = file_path.relative_to(local_dir.parent).as_posix()
     root = "/" + remote_root.strip("/")
-    return f"{root}/{relative}".replace("//", "/")
+    relative_parts = file_path.relative_to(local_dir).parts
+    if len(relative_parts) >= 3 and relative_parts[1].startswith("date="):
+        dataset, date_part, *remaining = relative_parts
+        filename = "/".join(remaining)
+        return f"{root}/{date_part}/{dataset}/{filename}".replace("//", "/")
+    return f"{root}/{'/'.join(relative_parts)}".replace("//", "/")
 
 
 def upload_file(local_path: Path, remote_path: str, access_token: str) -> None:

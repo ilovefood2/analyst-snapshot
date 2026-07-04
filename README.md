@@ -68,7 +68,7 @@ SNAPSHOT_DIR=./archive
 UNIVERSE_FILE=./universe.txt
 SYMBOL_DELAY_SECONDS=0.5
 LOG_DIR=./logs
-DROPBOX_REMOTE_ROOT=/analyst-snapshot
+DROPBOX_REMOTE_ROOT=/Claude/DailyStockSnapshots
 ```
 
 `UNIVERSE_FILE` should contain one ticker per line. Blank lines and `#` comments are ignored.
@@ -209,10 +209,23 @@ python -m analyst_snapshot upload-dropbox
 By default, Dropbox files are uploaded under:
 
 ```text
-/analyst-snapshot/archive/...
+/Claude/DailyStockSnapshots/date=YYYY-MM-DD/<dataset>/data.parquet
 ```
 
-For an App Folder Dropbox app, that path is relative to the app's own Dropbox folder.
+For example:
+
+```text
+/Claude/DailyStockSnapshots/date=2026-07-04/recommendations/data.parquet
+/Claude/DailyStockSnapshots/date=2026-07-04/analyst_price_targets/data.parquet
+```
+
+The deduped rating event log is uploaded to:
+
+```text
+/Claude/DailyStockSnapshots/rating_events/data.parquet
+```
+
+For an App Folder Dropbox app, these paths are relative to the app's own Dropbox folder.
 
 ## Scheduling on macOS
 
