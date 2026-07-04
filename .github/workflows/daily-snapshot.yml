@@ -78,6 +78,20 @@ jobs:
         if: steps.calendar.outputs.run == 'true'
         run: python -m analyst_snapshot verify
 
+      - name: Upload archive to Dropbox
+        if: steps.calendar.outputs.run == 'true'
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_REMOTE_ROOT: /analyst-snapshot
+        run: |
+          if [ -z "$DROPBOX_APP_KEY" ] || [ -z "$DROPBOX_APP_SECRET" ] || [ -z "$DROPBOX_REFRESH_TOKEN" ]; then
+            echo "Dropbox secrets are not fully configured; skipping Dropbox upload."
+            exit 0
+          fi
+          python -m analyst_snapshot upload-dropbox
+
       - name: Commit archive updates
         if: steps.calendar.outputs.run == 'true'
         run: |
