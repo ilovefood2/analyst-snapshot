@@ -46,6 +46,7 @@ def append_rating_events(
     snapshot_dir: Path,
     rows: list[dict[str, Any]],
     first_seen_utc: str,
+    run_date: str | None = None,
 ) -> int:
     path = snapshot_dir / "rating_events" / "data.parquet"
     event_rows = [row for row in rows if not row.get("no_analyst_coverage")]
@@ -83,6 +84,11 @@ def append_rating_events(
         new_only = new_only.drop(columns=["snapshot_utc"])
     combined = pd.concat([old_df, new_only], ignore_index=True, sort=False)
     combined.to_parquet(path, index=False)
+    if run_date:
+        append_rows(
+            dataset_path(snapshot_dir, "rating_events", run_date),
+            new_only.to_dict("records"),
+        )
     return len(new_only)
 
 

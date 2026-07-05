@@ -20,7 +20,7 @@ def test_append_rows_preserves_existing_parquet_rows(tmp_path) -> None:
     assert list(df["buy"]) == [1, 2]
 
 
-def test_rating_event_dedupe_keeps_first_seen(tmp_path) -> None:
+def test_rating_event_dedupe_keeps_first_seen_and_writes_date_partition(tmp_path) -> None:
     rows = [
         {
             "symbol": "AAPL",
@@ -31,13 +31,19 @@ def test_rating_event_dedupe_keeps_first_seen(tmp_path) -> None:
             "snapshot_utc": "snapshot-1",
         }
     ]
-    assert append_rating_events(tmp_path, rows, "first-seen-1") == 1
-    assert append_rating_events(tmp_path, rows, "first-seen-2") == 0
+    assert append_rating_events(tmp_path, rows, "first-seen-1", "2026-07-04") == 1
+    assert append_rating_events(tmp_path, rows, "first-seen-2", "2026-07-04") == 0
 
     df = read_parquet_or_empty(tmp_path / "rating_events" / "data.parquet")
     assert len(df) == 1
     assert df.iloc[0]["first_seen_utc"] == "first-seen-1"
     assert "snapshot_utc" not in df.columns
+
+    date_df = read_parquet_or_empty(
+        tmp_path / "rating_events" / "date=2026-07-04" / "data.parquet"
+    )
+    assert len(date_df) == 1
+    assert date_df.iloc[0]["first_seen_utc"] == "first-seen-1"
 
 
 def test_compact_rating_events_removes_duplicate_keys(tmp_path) -> None:

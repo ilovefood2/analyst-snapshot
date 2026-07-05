@@ -96,19 +96,22 @@ def upload_directory(local_dir: Path, remote_root: str, secrets: DropboxSecrets)
     files = sorted(path for path in local_dir.rglob("*") if path.is_file())
     for path in files:
         remote_path = remote_path_for_file(local_dir, path, remote_root)
+        if remote_path is None:
+            print(f"skipped non-date archive file {path}")
+            continue
         upload_file(path, remote_path, access_token)
         print(f"uploaded {path} -> dropbox:{remote_path}")
     return len(files)
 
 
-def remote_path_for_file(local_dir: Path, file_path: Path, remote_root: str) -> str:
+def remote_path_for_file(local_dir: Path, file_path: Path, remote_root: str) -> str | None:
     root = "/" + remote_root.strip("/")
     relative_parts = file_path.relative_to(local_dir).parts
     if len(relative_parts) >= 3 and relative_parts[1].startswith("date="):
         dataset, date_part, *remaining = relative_parts
         filename = "/".join(remaining)
         return f"{root}/{date_part}/{dataset}/{filename}".replace("//", "/")
-    return f"{root}/{'/'.join(relative_parts)}".replace("//", "/")
+    return None
 
 
 def upload_file(local_path: Path, remote_path: str, access_token: str) -> None:

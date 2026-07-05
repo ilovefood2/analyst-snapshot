@@ -219,11 +219,14 @@ For example:
 /Claude/DailyStockSnapshots/date=2026-07-04/analyst_price_targets/data.parquet
 ```
 
-The deduped rating event log is uploaded to:
+Newly first-seen rating events are uploaded as date-partitioned point-in-time files:
 
 ```text
-/Claude/DailyStockSnapshots/rating_events/data.parquet
+/Claude/DailyStockSnapshots/date=YYYY-MM-DD/rating_events/data.parquet
 ```
+
+The local cumulative `archive/rating_events/data.parquet` file is a derived dedupe index. Dropbox
+upload skips that non-date file so `DailyStockSnapshots` stays date-first and point-in-time.
 
 For an App Folder Dropbox app, these paths are relative to the app's own Dropbox folder.
 

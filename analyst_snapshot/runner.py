@@ -146,7 +146,12 @@ def _fetch_and_store_symbol(
         written = append_rows(dataset_path(snapshot_dir, spec.name, run_date), rows)
         summary.rows_written[spec.name] = summary.rows_written.get(spec.name, 0) + written
         if spec.name == "upgrades_downgrades":
-            summary.events_added += append_rating_events(snapshot_dir, rows, snapshot_utc)
+            summary.events_added += append_rating_events(
+                snapshot_dir,
+                rows,
+                snapshot_utc,
+                run_date,
+            )
         logger.write(
             "dataset_written",
             symbol=symbol,
