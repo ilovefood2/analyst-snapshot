@@ -101,6 +101,12 @@ Fetch selected symbols:
 python -m analyst_snapshot run --symbols AAPL,MSFT
 ```
 
+Write a snapshot to a specific partition date:
+
+```bash
+python -m analyst_snapshot run --resume --run-date 2026-07-03
+```
+
 Yahoo throttles aggressively. The app fetches serially, waits `SYMBOL_DELAY_SECONDS` between
 symbols, retries throttle-like failures with exponential backoff, pauses for 60 seconds or more
 after repeated failures, isolates per-symbol failures, and retries failed symbols once at the end.
@@ -152,7 +158,8 @@ What it does:
 
 - Runs every day at 12:00 UTC, which is morning in New York in both EST and EDT.
 - Uses the NYSE calendar to check whether yesterday was a trading day.
-- Runs `python -m analyst_snapshot run --resume` only when yesterday was a trading day.
+- Runs `python -m analyst_snapshot run --resume --run-date <trading_date>` only when yesterday was
+  a trading day.
 - Commits new files under `archive/` back to the repo so the point-in-time Parquet history survives
   the ephemeral cloud runner.
 - Supports manual runs from GitHub Actions with optional `force=true` and optional

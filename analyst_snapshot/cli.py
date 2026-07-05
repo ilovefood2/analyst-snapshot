@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--datasets", help="Comma-separated dataset codes: a,b,c,d")
     run_parser.add_argument("--symbols", help="Comma-separated symbols. Defaults to UNIVERSE_FILE.")
     run_parser.add_argument("--resume", action="store_true")
+    run_parser.add_argument("--run-date", help="Snapshot partition date, YYYY-MM-DD.")
 
     subparsers.add_parser("verify")
     subparsers.add_parser("compact")
@@ -91,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
             symbols=symbols,
             logger=logger,
             resume=args.resume,
+            run_date=args.run_date,
         )
         print(_summary_text(summary, logger.path))
         return 0
