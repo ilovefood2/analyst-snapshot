@@ -2,12 +2,14 @@ name: Daily analyst snapshot
 
 on:
   schedule:
-    # 12:00 UTC is morning in New York in both EST and EDT.
-    - cron: "0 12 * * *"
+    # 02:00 UTC is 22:00 in New York during EDT and 21:00 during EST. GitHub Actions cron is UTC
+    # only, so one of the two halves of the year is an hour off; both are hours after the close.
+    # The New York calendar date is resolved in code, so the partition date is correct either way.
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       force:
-        description: "Run even if yesterday was not an NYSE trading day"
+        description: "Run even if the checked date was not an NYSE trading day"
         required: false
         default: "false"
         type: choice
@@ -16,6 +18,10 @@ on:
           - "true"
       symbols:
         description: "Optional comma-separated symbols for a manual smoke run"
+        required: false
+        default: ""
+      run_date:
+        description: "Optional YYYY-MM-DD partition date override for a backfill"
         required: false
         default: ""
 
@@ -29,19 +35,22 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # GitHub caps a job at 360 minutes. The run step gets a shorter budget of its own so that a
+    # timeout still leaves time for the commit step to preserve whatever was fetched.
+    timeout-minutes: 350
     env:
       SNAPSHOT_DIR: ./archive
       UNIVERSE_FILE: ./universe.txt
       LOG_DIR: ./logs
       SYMBOL_DELAY_SECONDS: "0.5"
       PYTHONUNBUFFERED: "1"
+      # Fail the build when any dataset covers less than this share of the universe. The data is
+      # committed before this gate runs, so a red build never costs a day of history.
+      MIN_COVERAGE: "0.95"
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -55,52 +64,96 @@ jobs:
       - name: Decide whether to run
         id: calendar
         env:
-          FORCE_RUN: ${{ github.event.inputs.force || 'false' }}
+          FORCE_RUN: ${{ inputs.force || 'false' }}
         run: |
           force_arg=""
           if [ "$FORCE_RUN" = "true" ]; then
             force_arg="--force"
           fi
-          python -m analyst_snapshot should-run --github-output "$GITHUB_OUTPUT" $force_arg
+          python -m analyst_snapshot should-run --offset-days 0 \
+            --github-output "$GITHUB_OUTPUT" $force_arg
+
+      - name: Resolve partition date
+        id: partition
+        if: steps.calendar.outputs.run == 'true'
+        env:
+          OVERRIDE: ${{ inputs.run_date || '' }}
+          TRADING_DATE: ${{ steps.calendar.outputs.trading_date }}
+        run: echo "date=${OVERRIDE:-$TRADING_DATE}" >> "$GITHUB_OUTPUT"
 
       - name: Run analyst snapshot
         if: steps.calendar.outputs.run == 'true'
+        timeout-minutes: 300
+        continue-on-error: true
         env:
-          SYMBOLS: ${{ github.event.inputs.symbols || '' }}
+          SYMBOLS: ${{ inputs.symbols || '' }}
+          RUN_DATE: ${{ steps.partition.outputs.date }}
         run: |
           if [ -n "$SYMBOLS" ]; then
-            python -m analyst_snapshot run --resume --run-date "${{ steps.calendar.outputs.trading_date }}" --symbols "$SYMBOLS"
+            python -m analyst_snapshot run --resume --run-date "$RUN_DATE" --symbols "$SYMBOLS"
           else
-            python -m analyst_snapshot run --resume --run-date "${{ steps.calendar.outputs.trading_date }}"
+            python -m analyst_snapshot run --resume --run-date "$RUN_DATE"
           fi
 
-      - name: Verify snapshot
-        if: steps.calendar.outputs.run == 'true'
-        run: python -m analyst_snapshot verify
-
-      - name: Upload archive to Dropbox
-        if: steps.calendar.outputs.run == 'true'
-        env:
-          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
-          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
-          DROPBOX_REMOTE_ROOT: /Claude/DailyStockSnapshots
-        run: |
-          if [ -z "$DROPBOX_APP_KEY" ] || [ -z "$DROPBOX_APP_SECRET" ] || [ -z "$DROPBOX_REFRESH_TOKEN" ]; then
-            echo "Dropbox secrets are not fully configured; skipping Dropbox upload."
-            exit 0
-          fi
-          python -m analyst_snapshot upload-dropbox
-
+      # Committing before verifying keeps a bad-coverage day in the archive: the point-in-time
+      # record of a degraded Yahoo response is itself information, and verify still turns the
+      # build red.
+      # always(): a run that timed out or failed part-way still fetched real data, and re-running
+      # with the same --run-date and --resume picks up exactly where it stopped.
       - name: Commit archive updates
-        if: steps.calendar.outputs.run == 'true'
+        if: always() && steps.calendar.outputs.run == 'true'
+        env:
+          RUN_DATE: ${{ steps.partition.outputs.date }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add archive
           if git diff --cached --quiet; then
             echo "No archive changes to commit."
-          else
-            git commit -m "Archive analyst snapshot for ${{ steps.calendar.outputs.trading_date }}"
-            git push
+            exit 0
           fi
+          git commit -m "Archive analyst snapshot for $RUN_DATE"
+          for attempt in 1 2 3 4; do
+            if git push; then
+              exit 0
+            fi
+            echo "push failed (attempt $attempt); rebasing on origin and retrying"
+            git pull --rebase origin "${GITHUB_REF_NAME}" || true
+            sleep $((2 ** attempt))
+          done
+          echo "::error::Could not push the archive after 4 attempts."
+          exit 1
+
+      - name: Upload archive to Dropbox
+        if: always() && steps.calendar.outputs.run == 'true'
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_REMOTE_ROOT: /Claude/DailyStockSnapshots
+          RUN_DATE: ${{ steps.partition.outputs.date }}
+        run: |
+          if [ -z "$DROPBOX_APP_KEY" ] || [ -z "$DROPBOX_APP_SECRET" ] || [ -z "$DROPBOX_REFRESH_TOKEN" ]; then
+            echo "Dropbox secrets are not fully configured; skipping Dropbox upload."
+            exit 0
+          fi
+          python -m analyst_snapshot upload-dropbox --run-date "$RUN_DATE"
+
+      - name: Verify snapshot
+        if: always() && steps.calendar.outputs.run == 'true'
+        env:
+          RUN_DATE: ${{ steps.partition.outputs.date }}
+        run: |
+          python -m analyst_snapshot verify \
+            --run-date "$RUN_DATE" \
+            --fail-under "$MIN_COVERAGE" \
+            --json-out "verify-$RUN_DATE.json"
+
+      - name: Upload verify report
+        if: always() && steps.calendar.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: verify-*.json
+          if-no-files-found: ignore
+          retention-days: 30

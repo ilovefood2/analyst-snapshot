@@ -57,3 +57,45 @@ def test_auth_url_secret_loading_only_requires_app_key(monkeypatch) -> None:
     secrets = load_dropbox_secrets(require_refresh_token=False, require_app_secret=False)
 
     assert secrets.app_key == "app-key"
+
+
+def test_upload_directory_can_be_scoped_to_one_run_date(tmp_path: Path, monkeypatch) -> None:
+    from analyst_snapshot import dropbox_sync
+
+    archive = tmp_path / "archive"
+    for date_str in ("2026-07-03", "2026-07-04"):
+        path = archive / "recommendations" / f"date={date_str}" / "data.parquet"
+        path.parent.mkdir(parents=True)
+        path.write_text("x", encoding="utf-8")
+
+    uploaded: list[str] = []
+    monkeypatch.setattr(dropbox_sync, "refresh_access_token", lambda _secrets: "token")
+    monkeypatch.setattr(
+        dropbox_sync,
+        "upload_file",
+        lambda local, remote, token: uploaded.append(remote),
+    )
+    secrets = dropbox_sync.DropboxSecrets("key", "secret", "refresh")
+
+    count = dropbox_sync.upload_directory(archive, "/root", secrets, run_date="2026-07-04")
+
+    assert count == 1
+    assert uploaded == ["/root/date=2026-07-04/recommendations/data.parquet"]
+
+
+def test_upload_directory_counts_uploads_not_candidates(tmp_path: Path, monkeypatch) -> None:
+    from analyst_snapshot import dropbox_sync
+
+    archive = tmp_path / "archive"
+    (archive / "_index").mkdir(parents=True)
+    (archive / "_index" / "rating_events.parquet").write_text("x", encoding="utf-8")
+    partition = archive / "recommendations" / "date=2026-07-04" / "data.parquet"
+    partition.parent.mkdir(parents=True)
+    partition.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(dropbox_sync, "refresh_access_token", lambda _secrets: "token")
+    monkeypatch.setattr(dropbox_sync, "upload_file", lambda local, remote, token: None)
+    secrets = dropbox_sync.DropboxSecrets("key", "secret", "refresh")
+
+    # The derived index is skipped, so the returned count must not include it.
+    assert dropbox_sync.upload_directory(archive, "/root", secrets) == 1

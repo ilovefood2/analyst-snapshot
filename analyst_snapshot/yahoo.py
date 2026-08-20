@@ -46,10 +46,15 @@ class YahooAnalystFetcher:
         symbol_delay_seconds: float = 0.5,
         max_retries: int = 4,
         backoff_policy: BackoffPolicy | None = None,
+        max_empty_retries: int = 1,
     ) -> None:
         self._limiter = SymbolDelayLimiter(symbol_delay_seconds)
         self._max_retries = max_retries
         self._backoff_policy = backoff_policy or BackoffPolicy()
+        # An empty response is usually genuine "no analyst coverage" rather than throttling, and
+        # roughly 1% of the universe is uncovered. Retrying those to the full error budget costs
+        # over two minutes of backoff per symbol for data that will never arrive.
+        self._max_empty_retries = max(0, min(max_empty_retries, max_retries))
 
     def fetch_symbol(self, symbol: str, specs: Iterable[DatasetSpec]) -> dict[str, object]:
         specs_list = list(specs)
@@ -61,7 +66,7 @@ class YahooAnalystFetcher:
                 payloads = {spec.name: self._payload_for_spec(ticker, spec) for spec in specs_list}
                 if any(_has_payload(payload) for payload in payloads.values()):
                     return payloads
-                if attempt >= self._max_retries:
+                if attempt >= self._max_empty_retries:
                     return payloads
                 time.sleep(self._backoff_policy.delay_for_attempt(attempt))
             except Exception as exc:  # noqa: BLE001
@@ -76,9 +81,20 @@ class YahooAnalystFetcher:
 
     @staticmethod
     def _payload_for_spec(ticker: yf.Ticker, spec: DatasetSpec) -> object:
-        if spec.name == "estimates":
-            return {attribute: getattr(ticker, attribute, None) for attribute in spec.attributes}
-        return getattr(ticker, spec.attributes[0], None)
+        if spec.is_multi_table:
+            return {attribute: _attribute_value(ticker, attribute) for attribute in spec.attributes}
+        return _attribute_value(ticker, spec.attributes[0])
+
+
+def _attribute_value(ticker: yf.Ticker, attribute: str) -> object:
+    """Read a yfinance attribute, calling it when it is a getter such as get_shares_full."""
+    value = getattr(ticker, attribute, None)
+    if callable(value):
+        try:
+            return value()
+        except Exception:  # noqa: BLE001 - one missing table must not fail the whole symbol
+            return None
+    return value
 
 
 def _has_payload(payload: object) -> bool:
@@ -92,6 +108,11 @@ def _has_payload(payload: object) -> bool:
     if isinstance(payload, list):
         return len(payload) > 0
     return True
+
+
+def dataset_request_estimate(specs: Iterable[DatasetSpec]) -> int:
+    """Rough count of Yahoo attribute reads per symbol, for run-time budgeting."""
+    return sum(len(spec.attributes) for spec in specs)
 
 
 def _is_retryable_yahoo_error(exc: Exception) -> bool:
