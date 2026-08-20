@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -r requirements-dev.txt
+      # Editable install, not `-r requirements-dev.txt`: that installs the dependencies but not
+      # the package, so pytest cannot import analyst_snapshot.
+      - run: python -m pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q
