@@ -143,11 +143,18 @@ jobs:
         if: always() && steps.calendar.outputs.run == 'true'
         env:
           RUN_DATE: ${{ steps.partition.outputs.date }}
+          SYMBOLS: ${{ inputs.symbols || '' }}
         run: |
+          # A manual run scoped to a handful of symbols is deliberately partial, so holding it to
+          # the universe-wide coverage floor would fail every smoke test.
+          gate_arg="--fail-under $MIN_COVERAGE"
+          if [ -n "$SYMBOLS" ]; then
+            gate_arg=""
+            echo "Symbol-scoped run; skipping the --fail-under coverage gate."
+          fi
           python -m analyst_snapshot verify \
             --run-date "$RUN_DATE" \
-            --fail-under "$MIN_COVERAGE" \
-            --json-out "verify-$RUN_DATE.json"
+            --json-out "verify-$RUN_DATE.json" $gate_arg
 
       - name: Upload verify report
         if: always() && steps.calendar.outputs.run == 'true'
