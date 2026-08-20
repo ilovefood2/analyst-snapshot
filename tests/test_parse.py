@@ -52,7 +52,10 @@ def test_parse_estimates() -> None:
     assert rows[0]["avg"] == 1.52
 
 
-def test_parse_upgrades_downgrades() -> None:
+def test_parse_upgrades_downgrades_maps_yahoo_column_names() -> None:
+    # The fixture mirrors what yfinance actually returns: a GradeDate index and capitalised
+    # columns. An earlier fixture used lower-case names Yahoo never sends, which is why the
+    # missing GradeDate -> event key mapping went unnoticed.
     rows = parse_dataset_payload(
         "upgrades_downgrades",
         _fixture("upgrades_downgrades.json"),
@@ -62,3 +65,24 @@ def test_parse_upgrades_downgrades() -> None:
     assert len(rows) == 2
     assert rows[0]["firm"] == "Example Bank"
     assert rows[0]["toGrade"] == "Buy"
+    assert rows[0]["fromGrade"] == "Hold"
+    assert rows[0]["action"] == "up"
+    assert rows[0]["event_utc"] == "2026-07-01T13:12:44"
+    assert rows[0]["event_date"] == "2026-07-01"
+
+
+def test_event_rows_are_distinguishable_by_event_time() -> None:
+    from analyst_snapshot.storage import event_key
+
+    rows = parse_dataset_payload(
+        "upgrades_downgrades",
+        [
+            {"GradeDate": "2026-07-01T13:12:44", "Firm": "F", "ToGrade": "Buy", "Action": "main"},
+            {"GradeDate": "2026-08-01T13:12:44", "Firm": "F", "ToGrade": "Buy", "Action": "main"},
+        ],
+        "AAPL",
+        "2026-08-02T12:00:00Z",
+    )
+
+    # Two reiterations by one firm differ only by date; they must not share a dedupe key.
+    assert event_key(rows[0]) != event_key(rows[1])

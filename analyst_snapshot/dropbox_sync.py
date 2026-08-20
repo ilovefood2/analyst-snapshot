@@ -88,20 +88,39 @@ def refresh_access_token(secrets: DropboxSecrets) -> str:
     return access_token
 
 
-def upload_directory(local_dir: Path, remote_root: str, secrets: DropboxSecrets) -> int:
+def upload_directory(
+    local_dir: Path,
+    remote_root: str,
+    secrets: DropboxSecrets,
+    run_date: str | None = None,
+) -> int:
+    """Upload archive partitions to Dropbox and return the number of files actually uploaded.
+
+    ``run_date`` restricts the upload to a single partition date. The daily job passes it so a run
+    uploads that day's files instead of re-uploading the entire (permanently growing) archive.
+    """
     if not local_dir.exists():
         print(f"Dropbox upload skipped: {local_dir} does not exist.")
         return 0
+    candidates = sorted(path for path in local_dir.rglob("*") if path.is_file())
+    if run_date is not None:
+        wanted = f"date={run_date}"
+        candidates = [path for path in candidates if wanted in path.parts]
+        if not candidates:
+            print(f"Dropbox upload skipped: no files under date={run_date}.")
+            return 0
+
     access_token = refresh_access_token(secrets)
-    files = sorted(path for path in local_dir.rglob("*") if path.is_file())
-    for path in files:
+    uploaded = 0
+    for path in candidates:
         remote_path = remote_path_for_file(local_dir, path, remote_root)
         if remote_path is None:
             print(f"skipped non-date archive file {path}")
             continue
         upload_file(path, remote_path, access_token)
+        uploaded += 1
         print(f"uploaded {path} -> dropbox:{remote_path}")
-    return len(files)
+    return uploaded
 
 
 def remote_path_for_file(local_dir: Path, file_path: Path, remote_root: str) -> str | None:

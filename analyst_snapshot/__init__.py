@@ -1,3 +1,3 @@
-"""Point-in-time analyst data snapshots from Financial Modeling Prep."""
+"""Point-in-time analyst data snapshots from Yahoo Finance via yfinance."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

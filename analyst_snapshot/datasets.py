@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,107 @@ DATASETS: dict[str, DatasetSpec] = {
 }
 
 DEFAULT_DATASET_CODES = tuple(DATASETS)
-EVENT_KEY_COLUMNS = ["symbol", "date", "firm", "toGrade", "action"]
+RATING_EVENTS_DATASET = "rating_events"
+
+# Dedupe key for the rating-event log. `event_utc` carries Yahoo's GradeDate verbatim; `fromGrade`
+# is part of the key so two same-day actions by one firm are never collapsed into one event.
+# The key column is deliberately not called `date`: that name is the hive partition key, and a file
+# column of the same name is shadowed by the partition value when the archive is read as a dataset.
+EVENT_KEY_COLUMNS = ["symbol", "event_utc", "firm", "fromGrade", "toGrade", "action"]
+
+# Columns whose Parquet type is pinned so the archive stays readable as one dataset regardless of
+# which pandas/pyarrow version wrote a given partition. Columns not listed here are still written;
+# their type is inferred, and consumers should treat them as best-effort.
+_STRING = pa.large_string()
+_COMMON_COLUMNS: dict[str, pa.DataType] = {
+    "symbol": _STRING,
+    "snapshot_utc": _STRING,
+    "dataset": _STRING,
+    "run_id": _STRING,
+    "no_analyst_coverage": pa.bool_(),
+}
+_EVENT_COLUMNS: dict[str, pa.DataType] = {
+    "event_utc": _STRING,
+    "event_date": _STRING,
+    "firm": _STRING,
+    "fromGrade": _STRING,
+    "toGrade": _STRING,
+    "action": _STRING,
+    "priceTargetAction": _STRING,
+    "currentPriceTarget": pa.float64(),
+    "priorPriceTarget": pa.float64(),
+}
+
+# Yahoo's own spellings. Verified byte-identical to the canonical columns across 1.07M archived
+# rows, so new partitions keep only the canonical ones; storing both doubles the largest dataset.
+# Partitions written before 0.2.0 still carry these, and the reader fills the canonical columns
+# from them so both vintages look the same to consumers.
+LEGACY_EVENT_COLUMNS: dict[str, str] = {
+    "GradeDate": "event_utc",
+    "Firm": "firm",
+    "FromGrade": "fromGrade",
+    "ToGrade": "toGrade",
+    "Action": "action",
+}
+
+CORE_SCHEMAS: dict[str, dict[str, pa.DataType]] = {
+    "recommendations": {
+        **_COMMON_COLUMNS,
+        "period": _STRING,
+        "strongBuy": pa.float64(),
+        "buy": pa.float64(),
+        "hold": pa.float64(),
+        "sell": pa.float64(),
+        "strongSell": pa.float64(),
+    },
+    "analyst_price_targets": {
+        **_COMMON_COLUMNS,
+        "current": pa.float64(),
+        "low": pa.float64(),
+        "high": pa.float64(),
+        "mean": pa.float64(),
+        "median": pa.float64(),
+    },
+    "estimates": {
+        **_COMMON_COLUMNS,
+        "estimate_table": _STRING,
+        "period": _STRING,
+        "currency": _STRING,
+        "avg": pa.float64(),
+        "low": pa.float64(),
+        "high": pa.float64(),
+        "growth": pa.float64(),
+        "numberOfAnalysts": pa.float64(),
+        "yearAgoEps": pa.float64(),
+        "yearAgoRevenue": pa.float64(),
+        "current": pa.float64(),
+        "7daysAgo": pa.float64(),
+        "30daysAgo": pa.float64(),
+        "60daysAgo": pa.float64(),
+        "90daysAgo": pa.float64(),
+        "upLast7days": pa.float64(),
+        "upLast30days": pa.float64(),
+        "downLast7Days": pa.float64(),
+        "downLast30days": pa.float64(),
+    },
+    "upgrades_downgrades": {**_COMMON_COLUMNS, **_EVENT_COLUMNS},
+    RATING_EVENTS_DATASET: {
+        **{name: kind for name, kind in _COMMON_COLUMNS.items() if name != "snapshot_utc"},
+        **_EVENT_COLUMNS,
+        "first_seen_utc": _STRING,
+    },
+}
+
+# Aliases mapping Yahoo's column spellings onto the canonical lower-camel event columns. The index
+# of `Ticker.upgrades_downgrades` is named GradeDate, which is why `date` was never populated by
+# the original alias table.
+_EVENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "firm": ("firm", "Firm"),
+    "fromGrade": ("fromGrade", "FromGrade"),
+    "toGrade": ("toGrade", "ToGrade"),
+    "action": ("action", "Action"),
+    "event_utc": ("event_utc", "GradeDate", "Date", "gradeDate"),
+}
 
 
 def parse_dataset_codes(raw: str | None) -> list[str]:
@@ -56,7 +157,7 @@ def parse_dataset_payload(
 
     rows = [_base_row(row, symbol, snapshot_utc) for row in rows_from_payload(payload)]
     if dataset_name == "upgrades_downgrades":
-        return [_normalize_event_row(row) for row in rows]
+        return [normalize_event_row(row) for row in rows]
     return rows
 
 
@@ -102,24 +203,48 @@ def _base_row(row: dict[str, Any], symbol: str, snapshot_utc: str) -> dict[str, 
     return parsed
 
 
-def _normalize_event_row(row: dict[str, Any]) -> dict[str, Any]:
+def normalize_event_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Fill the canonical event columns from whichever spelling Yahoo returned."""
     normalized = dict(row)
-    aliases = {
-        "Firm": "firm",
-        "firm": "firm",
-        "FromGrade": "fromGrade",
-        "fromGrade": "fromGrade",
-        "ToGrade": "toGrade",
-        "toGrade": "toGrade",
-        "Action": "action",
-        "action": "action",
-        "Date": "date",
-        "date": "date",
-    }
-    for source, target in aliases.items():
-        if source in normalized and target not in normalized:
-            normalized[target] = normalized[source]
+    for target, sources in _EVENT_ALIASES.items():
+        if is_blank(normalized.get(target)):
+            normalized[target] = None
+            for source in sources:
+                value = normalized.get(source)
+                if not is_blank(value):
+                    normalized[target] = value
+                    break
+    normalized["event_date"] = _date_part(normalized.get("event_utc"))
+    for legacy in LEGACY_EVENT_COLUMNS:
+        normalized.pop(legacy, None)
     return normalized
+
+
+def is_blank(value: Any) -> bool:
+    """True for None, empty/whitespace strings, and pandas NA/NaN.
+
+    Values read back from Parquet come through as pd.NA rather than None, so an identity check
+    against None alone silently treats missing data as populated.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _date_part(value: Any) -> str | None:
+    if is_blank(value):
+        return None
+    text = str(value)
+    head = text.split("T", 1)[0].split(" ", 1)[0]
+    try:
+        return date.fromisoformat(head).isoformat()
+    except ValueError:
+        return None
 
 
 def _clean_mapping(row: dict[Any, Any]) -> dict[str, Any]:
@@ -131,7 +256,7 @@ def _clean_value(value: Any) -> Any:
         try:
             if pd.isna(value):
                 return None
-        except TypeError:
+        except (TypeError, ValueError):
             pass
     if isinstance(value, pd.Timestamp):
         if value.time().isoformat() == "00:00:00":

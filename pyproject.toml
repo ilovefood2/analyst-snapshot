@@ -1,8 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "analyst-snapshot"
-version = "0.1.0"
-description = "Daily point-in-time snapshots of FMP analyst data for ML research."
+version = "0.2.0"
+description = "Daily point-in-time snapshots of Yahoo Finance analyst data for ML research."
 requires-python = ">=3.12"
+dependencies = [
+    "yfinance>=0.2.50",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "pandas-market-calendars>=4.4",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+analyst-snapshot = "analyst_snapshot.cli:main"
+
+[tool.setuptools]
+packages = ["analyst_snapshot"]
 
 [tool.ruff]
 line-length = 100

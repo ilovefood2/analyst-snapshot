@@ -1,16 +1,22 @@
 [
   {
-    "date": "2026-07-01",
-    "firm": "Example Bank",
-    "fromGrade": "Hold",
-    "toGrade": "Buy",
-    "action": "up"
+    "GradeDate": "2026-07-01T13:12:44",
+    "Firm": "Example Bank",
+    "FromGrade": "Hold",
+    "ToGrade": "Buy",
+    "Action": "up",
+    "priceTargetAction": "Raises",
+    "currentPriceTarget": 240.0,
+    "priorPriceTarget": 205.0
   },
   {
-    "date": "2026-06-15",
-    "firm": "Sample Securities",
-    "fromGrade": "Buy",
-    "toGrade": "Hold",
-    "action": "down"
+    "GradeDate": "2026-06-15T11:02:05",
+    "Firm": "Sample Securities",
+    "FromGrade": "Buy",
+    "ToGrade": "Hold",
+    "Action": "down",
+    "priceTargetAction": "Lowers",
+    "currentPriceTarget": 180.0,
+    "priorPriceTarget": 215.0
   }
 ]
