@@ -81,9 +81,20 @@ class YahooAnalystFetcher:
 
     @staticmethod
     def _payload_for_spec(ticker: yf.Ticker, spec: DatasetSpec) -> object:
-        if spec.name == "estimates":
-            return {attribute: getattr(ticker, attribute, None) for attribute in spec.attributes}
-        return getattr(ticker, spec.attributes[0], None)
+        if spec.is_multi_table:
+            return {attribute: _attribute_value(ticker, attribute) for attribute in spec.attributes}
+        return _attribute_value(ticker, spec.attributes[0])
+
+
+def _attribute_value(ticker: yf.Ticker, attribute: str) -> object:
+    """Read a yfinance attribute, calling it when it is a getter such as get_shares_full."""
+    value = getattr(ticker, attribute, None)
+    if callable(value):
+        try:
+            return value()
+        except Exception:  # noqa: BLE001 - one missing table must not fail the whole symbol
+            return None
+    return value
 
 
 def _has_payload(payload: object) -> bool:
@@ -97,6 +108,11 @@ def _has_payload(payload: object) -> bool:
     if isinstance(payload, list):
         return len(payload) > 0
     return True
+
+
+def dataset_request_estimate(specs: Iterable[DatasetSpec]) -> int:
+    """Rough count of Yahoo attribute reads per symbol, for run-time budgeting."""
+    return sum(len(spec.attributes) for spec in specs)
 
 
 def _is_retryable_yahoo_error(exc: Exception) -> bool:

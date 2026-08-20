@@ -20,6 +20,19 @@ one rule that matters for backtests: **filter on `snapshot_utc`, never on the pa
 | `b` | `analyst_price_targets` | `Ticker.analyst_price_targets` |
 | `c` | `estimates` | `Ticker.earnings_estimate`, `Ticker.revenue_estimate`, `Ticker.eps_trend`, `Ticker.eps_revisions` |
 | `d` | `upgrades_downgrades` | `Ticker.upgrades_downgrades` |
+| `e` | `profile` | `Ticker.info` (curated point-in-time projection) |
+| `f` | `earnings` | `Ticker.calendar`, `Ticker.earnings_dates` |
+| `g` | `holders` | `Ticker.major_holders`, `Ticker.institutional_holders`, `Ticker.insider_transactions`, `Ticker.insider_purchases` |
+| `h` | `shares_outstanding` | `Ticker.get_shares_full()` |
+
+Datasets `e` to `h` exist because each captures something that is **restated or drifts** and so
+cannot be reconstructed after the fact: market cap, float and share count; short interest (revised
+twice a month); sector and industry classification; the forward earnings date as believed on a
+given day; and institutional and insider positions. A daily `marketCap` and `sector` series is
+what turns a current-only universe into a point-in-time one.
+
+Price and volume are deliberately **not** captured: they are reconstructable from any provider at
+any time, so a daily snapshot of them buys nothing.
 
 Daily snapshots are written to:
 
@@ -91,6 +104,23 @@ DROPBOX_REMOTE_ROOT=/Claude/DailyStockSnapshots
 
 `UNIVERSE_FILE` should contain one ticker per line. Blank lines and `#` comments are ignored.
 
+Symbols must use **Yahoo's** spelling — class shares take a hyphen (`BRK-B`, `BF-B`), not a dot or
+a slash. Yahoo answers an unknown spelling with an empty response that looks exactly like "no
+analyst coverage", so a misspelled ticker silently archives empty rows forever.
+
+Rebuild the universe from the NASDAQ screener (Nasdaq + NYSE common stock and ADRs, market cap
+above a floor, warrants/rights/units/preferreds dropped, symbols normalised to Yahoo spelling):
+
+```bash
+python -m analyst_snapshot build-universe --min-market-cap 300000000
+```
+
+Symbols already in the file are always kept, even if they now fall below the floor — dropping a
+symbol stops its history, and point-in-time analyst data cannot be backfilled later. Pass
+`--dry-run` to preview counts, or `--replace` to override the carry-over.
+
+The current universe is about 3,465 symbols.
+
 No API key is needed.
 
 ## Run
@@ -129,8 +159,13 @@ Yahoo throttles aggressively. The app fetches serially, waits `SYMBOL_DELAY_SECO
 symbols, retries throttle-like failures with exponential backoff, pauses for 60 seconds or more
 after repeated failures, isolates per-symbol failures, and retries failed symbols once at the end.
 An empty response is treated as genuine "no coverage" after one retry rather than consuming the
-whole error budget, because a few hundred seconds of backoff per uncovered symbol adds up. A full
-run of about 1,330 symbols should take roughly 45 to 90 minutes depending on Yahoo behavior.
+whole error budget, because a few hundred seconds of backoff per uncovered symbol adds up.
+
+A full run of about 3,465 symbols across all eight datasets takes roughly three to five hours
+depending on Yahoo behavior. The scheduled job gives the run step a 300-minute budget inside a
+350-minute job, so a run that overruns still reaches the commit step and keeps what it fetched;
+re-dispatching with the same `run_date` and `--resume` finishes the remainder. Use `--datasets` to
+run a smaller subset when you only need part of the picture.
 
 Rows are buffered and each partition file is rewritten once per `--flush-every` symbols (50 by
 default) instead of once per symbol. A crash loses at most that many symbols' rows, which `--resume`

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from analyst_snapshot.datasets import DATASETS
 from analyst_snapshot.storage import append_rows, dataset_path
 from analyst_snapshot.verify import coverage_report, print_coverage_report
 
@@ -13,8 +14,8 @@ def _universe(tmp_path: Path, symbols: list[str]) -> Path:
 
 
 def _write(archive: Path, date_str: str, rows: list[dict[str, object]]) -> None:
-    for dataset in ("recommendations", "analyst_price_targets", "estimates", "upgrades_downgrades"):
-        append_rows(dataset_path(archive, dataset, date_str), rows, dataset)
+    for spec in DATASETS.values():
+        append_rows(dataset_path(archive, spec.name, date_str), rows, spec.name)
 
 
 def test_report_defaults_to_the_newest_partition_not_today(tmp_path: Path) -> None:

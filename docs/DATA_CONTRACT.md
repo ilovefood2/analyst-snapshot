@@ -11,6 +11,10 @@ archive/
   analyst_price_targets/date=YYYY-MM-DD/data.parquet
   estimates/date=YYYY-MM-DD/data.parquet
   upgrades_downgrades/date=YYYY-MM-DD/data.parquet
+  profile/date=YYYY-MM-DD/data.parquet
+  earnings/date=YYYY-MM-DD/data.parquet
+  holders/date=YYYY-MM-DD/data.parquet
+  shares_outstanding/date=YYYY-MM-DD/data.parquet
   rating_events/date=YYYY-MM-DD/data.parquet
   _index/rating_events.parquet
   _manifests/date=YYYY-MM-DD/run_<timestamp>.json
@@ -71,6 +75,9 @@ observation within `lookback_days` is returned instead.
 | `run_id` | string | Links the row to `_manifests/date=…/<run_id>.json`. Null for pre-0.2.0 rows. |
 | `no_analyst_coverage` | bool | `true` on a placeholder row written when Yahoo returned nothing. |
 
+The flag is named for the original four analyst datasets; on `profile`, `earnings`, `holders` and
+`shares_outstanding` it simply means Yahoo returned no rows for that symbol and dataset.
+
 `no_analyst_coverage` rows carry no data. They exist so `--resume` and coverage checks can tell
 "Yahoo has nothing for this symbol" apart from "this symbol was never fetched". The reader drops
 them unless you pass `drop_no_coverage=False`.
@@ -108,6 +115,51 @@ columns from the legacy spellings when it reads an older partition, so a query s
 returns one consistent shape. Code reading the Parquet files directly must handle both, which is
 the main reason to go through the reader.
 
+### `profile`
+A curated projection of `Ticker.info`, one row per symbol per day. Every field here is included
+because it is **restated or drifts** and cannot be reconstructed later:
+
+- **Size and ownership**: `marketCap`, `enterpriseValue`, `sharesOutstanding`,
+  `impliedSharesOutstanding`, `floatShares`, `heldPercentInsiders`, `heldPercentInstitutions`.
+- **Short interest**: `sharesShort`, `sharesShortPriorMonth`, `shortRatio`, `shortPercentOfFloat`,
+  `dateShortInterest`, `sharesShortPreviousMonthDate`. Reported twice a month and revised.
+- **Classification**: `sector`, `industry`, `country`, `exchange`, `quoteType`, `currency`.
+  Yahoo reclassifies names over time and keeps no history.
+- **Valuation and fundamentals**: `trailingPE`, `forwardPE`, `priceToBook`, `enterpriseToEbitda`,
+  `trailingPegRatio`, `beta`, margins, returns, leverage and growth rates.
+- **Fiscal timing**: `mostRecentQuarter`, `lastFiscalYearEnd`, `nextFiscalYearEnd`,
+  `exDividendDate`, `lastDividendDate`, `lastSplitDate`, `lastSplitFactor`.
+
+Date-like fields arrive from Yahoo as **epoch seconds** and are stored numerically; convert with
+`pd.to_datetime(col, unit="s")`. Live quote fields (bid, ask, day range, volume) are deliberately
+excluded — they are intraday noise and obtainable from any price provider.
+
+A daily `marketCap` and `sector` series is what turns a current-only, survivor-conditioned
+universe into a point-in-time one. That is the main reason this dataset exists.
+
+### `earnings`
+`earnings_table` selects the source: `calendar` or `earnings_dates`.
+
+- `calendar` rows carry the **forward** earnings date as believed on that snapshot date, plus the
+  consensus `earnings_average` / `earnings_high` / `earnings_low` and revenue equivalents. Yahoo
+  returns the earnings date as a range; it is flattened to a comma-separated string in
+  `earnings_date` so the column stays scalar.
+- `earnings_dates` rows carry the historical `eps_estimate`, `reported_eps` and `surprise_pct`.
+
+Expected earnings dates move by days as companies confirm them. Only a daily snapshot preserves
+what the date was believed to be at any past moment, which is what a swing strategy needs to know
+whether a position was held through a print.
+
+### `holders`
+`holders_table` selects the source: `major_holders`, `institutional_holders`,
+`insider_transactions` or `insider_purchases`. Institutional positions are reported quarterly with
+a lag and are revised; `date_reported` is the filing date, not the snapshot date.
+
+### `shares_outstanding`
+`Ticker.get_shares_full()` flattened to one row per observation: `as_of_date` and
+`shares_outstanding`. Like `upgrades_downgrades`, each snapshot restates the whole series, so
+diffing two dates reveals restatements.
+
 ### `rating_events`
 Deduped rating changes, in two forms with different semantics:
 
@@ -134,6 +186,10 @@ the earliest snapshot the event appeared in.
 - A throttled Yahoo response can look identical to genuine "no coverage". `analyst_snapshot verify`
   reports `newly_uncovered_symbols` (covered yesterday, uncovered today) to surface this; a spike
   there means a degraded run, not a corporate event.
+- Symbols must be spelled the way **Yahoo** spells them. Class shares use a hyphen: `BRK-B`, not
+  `BRK.B` (many sources) or `BRK/B` (NASDAQ). Yahoo answers an unknown spelling with an empty
+  response that is indistinguishable from genuine "no analyst coverage", so a misspelled symbol
+  archives empty markers indefinitely. `analyst_snapshot build-universe` normalises this.
 - `universe.txt` is the current universe, not a point-in-time one. Symbols added later are absent
   from older partitions, and delisted symbols simply stop appearing. Any study over a long window
   should reconstruct the per-date universe from the partitions themselves, not from `universe.txt`,

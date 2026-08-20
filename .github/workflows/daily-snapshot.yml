@@ -35,7 +35,9 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # GitHub caps a job at 360 minutes. The run step gets a shorter budget of its own so that a
+    # timeout still leaves time for the commit step to preserve whatever was fetched.
+    timeout-minutes: 350
     env:
       SNAPSHOT_DIR: ./archive
       UNIVERSE_FILE: ./universe.txt
@@ -81,6 +83,8 @@ jobs:
 
       - name: Run analyst snapshot
         if: steps.calendar.outputs.run == 'true'
+        timeout-minutes: 300
+        continue-on-error: true
         env:
           SYMBOLS: ${{ inputs.symbols || '' }}
           RUN_DATE: ${{ steps.partition.outputs.date }}
@@ -94,8 +98,10 @@ jobs:
       # Committing before verifying keeps a bad-coverage day in the archive: the point-in-time
       # record of a degraded Yahoo response is itself information, and verify still turns the
       # build red.
+      # always(): a run that timed out or failed part-way still fetched real data, and re-running
+      # with the same --run-date and --resume picks up exactly where it stopped.
       - name: Commit archive updates
-        if: steps.calendar.outputs.run == 'true'
+        if: always() && steps.calendar.outputs.run == 'true'
         env:
           RUN_DATE: ${{ steps.partition.outputs.date }}
         run: |
@@ -119,7 +125,7 @@ jobs:
           exit 1
 
       - name: Upload archive to Dropbox
-        if: steps.calendar.outputs.run == 'true'
+        if: always() && steps.calendar.outputs.run == 'true'
         env:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
@@ -134,7 +140,7 @@ jobs:
           python -m analyst_snapshot upload-dropbox --run-date "$RUN_DATE"
 
       - name: Verify snapshot
-        if: steps.calendar.outputs.run == 'true'
+        if: always() && steps.calendar.outputs.run == 'true'
         env:
           RUN_DATE: ${{ steps.partition.outputs.date }}
         run: |

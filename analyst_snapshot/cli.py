@@ -17,6 +17,15 @@ from analyst_snapshot.reader import archive_summary
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
 from analyst_snapshot.storage import compact_rating_events, rebuild_rating_events_index
 from analyst_snapshot.trading_calendar import DEFAULT_OFFSET_DAYS, print_should_run_report
+from analyst_snapshot.universe import (
+    DEFAULT_EXCHANGES,
+    DEFAULT_MIN_MARKET_CAP,
+    fetch_screener_rows,
+    load_rows_from_files,
+    read_existing,
+    select_symbols,
+    write_universe,
+)
 from analyst_snapshot.verify import print_coverage_report
 from analyst_snapshot.yahoo import YahooAnalystFetcher
 
@@ -55,6 +64,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rebuild the rating-event index from the daily upgrades_downgrades partitions.",
     )
     subparsers.add_parser("info", help="Print an inventory of the archive as JSON.")
+
+    universe_parser = subparsers.add_parser(
+        "build-universe",
+        help="Rebuild UNIVERSE_FILE from the NASDAQ screener (Nasdaq + NYSE common stock/ADRs).",
+    )
+    universe_parser.add_argument(
+        "--min-market-cap",
+        type=float,
+        default=DEFAULT_MIN_MARKET_CAP,
+        help="Market-cap floor in USD. Symbols already in the universe are kept regardless.",
+    )
+    universe_parser.add_argument(
+        "--exchange",
+        action="append",
+        dest="exchanges",
+        help="Exchange to include; repeatable. Defaults to nasdaq and nyse.",
+    )
+    universe_parser.add_argument(
+        "--from-json",
+        action="append",
+        dest="from_json",
+        help="Read screener rows from local JSON instead of the network; repeatable.",
+    )
+    universe_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Drop symbols already in the universe. Stops their history; rarely the right choice.",
+    )
+    universe_parser.add_argument("--dry-run", action="store_true")
     subparsers.add_parser("dropbox-auth-url")
 
     dropbox_exchange_parser = subparsers.add_parser("dropbox-exchange-code")
@@ -102,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
             fail_under=args.fail_under,
             json_out=Path(args.json_out) if args.json_out else None,
         )
+
+    if args.command == "build-universe":
+        return _build_universe(args, config.universe_file)
 
     if args.command == "info":
         print(json.dumps(archive_summary(config.snapshot_dir), indent=2, sort_keys=True))
@@ -161,6 +202,34 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     return 1
+
+
+def _build_universe(args: argparse.Namespace, universe_file: Path) -> int:
+    if args.from_json:
+        rows = load_rows_from_files([Path(path) for path in args.from_json])
+    else:
+        rows = fetch_screener_rows(tuple(args.exchanges or DEFAULT_EXCHANGES))
+    carry_over = [] if args.replace else read_existing(universe_file)
+    symbols, stats = select_symbols(rows, args.min_market_cap, carry_over=carry_over)
+    print(
+        json.dumps(
+            {
+                "listings": stats.listings,
+                "after_security_filter": stats.after_security_filter,
+                "above_market_cap_floor": stats.after_market_cap_filter,
+                "carried_over_from_existing": stats.carried_over,
+                "total": stats.total,
+                "min_market_cap": args.min_market_cap,
+                "path": str(universe_file),
+                "written": not args.dry_run,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    if not args.dry_run:
+        write_universe(universe_file, symbols)
+    return 0
 
 
 def _symbols_from_args(raw_symbols: str | None, universe_file: Path) -> list[str]:
