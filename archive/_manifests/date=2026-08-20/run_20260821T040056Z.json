@@ -1,0 +1,68 @@
+{
+  "analyst_snapshot_version": "0.2.0",
+  "datasets": {
+    "analyst_price_targets": {
+      "path": "archive/analyst_price_targets/date=2026-08-20/data.parquet",
+      "rows_written": 2962,
+      "symbols_no_coverage": 15
+    },
+    "earnings": {
+      "path": "archive/earnings/date=2026-08-20/data.parquet",
+      "rows_written": 64172,
+      "symbols_no_coverage": 0
+    },
+    "estimates": {
+      "path": "archive/estimates/date=2026-08-20/data.parquet",
+      "rows_written": 44482,
+      "symbols_no_coverage": 50
+    },
+    "holders": {
+      "path": "archive/holders/date=2026-08-20/data.parquet",
+      "rows_written": 237791,
+      "symbols_no_coverage": 2
+    },
+    "profile": {
+      "path": "archive/profile/date=2026-08-20/data.parquet",
+      "rows_written": 2962,
+      "symbols_no_coverage": 0
+    },
+    "recommendations": {
+      "path": "archive/recommendations/date=2026-08-20/data.parquet",
+      "rows_written": 10026,
+      "symbols_no_coverage": 213
+    },
+    "shares_outstanding": {
+      "path": "archive/shares_outstanding/date=2026-08-20/data.parquet",
+      "rows_written": 413205,
+      "symbols_no_coverage": 20
+    },
+    "upgrades_downgrades": {
+      "path": "archive/upgrades_downgrades/date=2026-08-20/data.parquet",
+      "rows_written": 339422,
+      "symbols_no_coverage": 201
+    }
+  },
+  "events_added": 108953,
+  "failures": [
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "GPI"
+    }
+  ],
+  "finished_utc": "2026-08-21T05:22:14Z",
+  "package_versions": {
+    "pandas": "3.0.5",
+    "pandas-market-calendars": "5.4.0",
+    "pyarrow": "25.0.1",
+    "yfinance": "1.6.0"
+  },
+  "run_date": "2026-08-20",
+  "run_id": "run_20260821T040056Z",
+  "started_utc": "2026-08-21T04:00:56Z",
+  "symbols_attempted": 2963,
+  "symbols_retried": [
+    "GPI"
+  ],
+  "symbols_skipped_resume": 503
+}
