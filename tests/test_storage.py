@@ -196,3 +196,23 @@ def test_unexpected_yahoo_types_do_not_lose_the_partition(tmp_path: Path, capsys
     assert list(df["symbol"]) == ["AAPL"]
     assert list(df["buy"]) == ["not-a-number"]
     assert "keeping inferred type" in capsys.readouterr().out
+
+
+def test_non_finite_string_in_numeric_column_does_not_abort_append(tmp_path: Path) -> None:
+    # Yahoo has returned the literal string "Infinity" for this ratio. Mixed with an existing
+    # float partition, that used to make Arrow fail before its per-column fallback could run.
+    path = dataset_path(tmp_path, "profile", "2026-08-20")
+    append_rows(
+        path,
+        [{"symbol": "AAPL", "snapshot_utc": "t1", "priceToSalesTrailing12Months": 8.5}],
+    )
+    append_rows(
+        path,
+        [{"symbol": "BXBL", "snapshot_utc": "t2", "priceToSalesTrailing12Months": "Infinity"}],
+    )
+
+    df = pd.read_parquet(path)
+    assert list(df["symbol"]) == ["AAPL", "BXBL"]
+    assert df.loc[df["symbol"] == "AAPL", "priceToSalesTrailing12Months"].item() == 8.5
+    assert pd.isna(df.loc[df["symbol"] == "BXBL", "priceToSalesTrailing12Months"].item())
+    assert pq.read_schema(path).field("priceToSalesTrailing12Months").type == "double"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,10 @@ PARQUET_COMPRESSION = "zstd"
 PARQUET_COMPRESSION_LEVEL = 9
 
 DEFAULT_FLUSH_EVERY_SYMBOLS = 50
+
+_NON_FINITE_FLOAT_STRINGS = frozenset(
+    {"inf", "+inf", "-inf", "infinity", "+infinity", "-infinity", "nan", "+nan", "-nan"}
+)
 
 
 def utc_now_iso() -> str:
@@ -84,11 +90,36 @@ def _conform_table(df: pd.DataFrame, dataset_name: str) -> pa.Table:
     for column in core:
         if column not in frame.columns:
             frame[column] = None
+    _null_non_finite_floats(frame, core)
     extras = sorted(column for column in frame.columns if column not in core)
     frame = frame[[*core, *extras]]
 
     table = pa.Table.from_pandas(frame, preserve_index=False)
     return _cast_known_columns(table, core)
+
+
+def _null_non_finite_floats(frame: pd.DataFrame, core: dict[str, pa.DataType]) -> None:
+    """Replace provider non-finite sentinels in declared float columns with nulls.
+
+    Yahoo sometimes serializes an undefined ratio as the string ``"Infinity"``. When that row
+    is appended to an existing numeric partition, pandas creates a mixed object column and Arrow
+    fails before the normal per-column cast fallback can run. A non-finite value has no useful
+    meaning for these metrics, so null keeps the declared numeric schema without losing the row.
+    """
+    for column, target in core.items():
+        if column not in frame.columns or not pa.types.is_floating(target):
+            continue
+        mask = frame[column].map(_is_non_finite_float)
+        if mask.any():
+            frame.loc[mask, column] = None
+
+
+def _is_non_finite_float(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in _NON_FINITE_FLOAT_STRINGS
+    if isinstance(value, Real):
+        return not math.isfinite(float(value))
+    return False
 
 
 def _cast_known_columns(table: pa.Table, core: dict[str, pa.DataType]) -> pa.Table:
