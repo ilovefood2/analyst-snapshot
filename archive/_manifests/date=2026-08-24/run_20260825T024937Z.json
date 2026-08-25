@@ -1,0 +1,74 @@
+{
+  "analyst_snapshot_version": "0.2.0",
+  "datasets": {
+    "analyst_price_targets": {
+      "path": "archive/analyst_price_targets/date=2026-08-24/data.parquet",
+      "rows_written": 3465,
+      "symbols_no_coverage": 21
+    },
+    "earnings": {
+      "path": "archive/earnings/date=2026-08-24/data.parquet",
+      "rows_written": 74843,
+      "symbols_no_coverage": 0
+    },
+    "estimates": {
+      "path": "archive/estimates/date=2026-08-24/data.parquet",
+      "rows_written": 52038,
+      "symbols_no_coverage": 58
+    },
+    "holders": {
+      "path": "archive/holders/date=2026-08-24/data.parquet",
+      "rows_written": 278068,
+      "symbols_no_coverage": 1
+    },
+    "profile": {
+      "path": "archive/profile/date=2026-08-24/data.parquet",
+      "rows_written": 3465,
+      "symbols_no_coverage": 0
+    },
+    "recommendations": {
+      "path": "archive/recommendations/date=2026-08-24/data.parquet",
+      "rows_written": 11835,
+      "symbols_no_coverage": 248
+    },
+    "shares_outstanding": {
+      "path": "archive/shares_outstanding/date=2026-08-24/data.parquet",
+      "rows_written": 477837,
+      "symbols_no_coverage": 26
+    },
+    "upgrades_downgrades": {
+      "path": "archive/upgrades_downgrades/date=2026-08-24/data.parquet",
+      "rows_written": 398367,
+      "symbols_no_coverage": 228
+    }
+  },
+  "events_added": 179,
+  "failures": [
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "CROX"
+    },
+    {
+      "error": "Failed to perform, curl: (16) . See https://curl.se/libcurl/c/libcurl-errors.html first for more details.",
+      "retry": "False",
+      "symbol": "PAAS"
+    }
+  ],
+  "finished_utc": "2026-08-25T04:38:41Z",
+  "package_versions": {
+    "pandas": "3.0.5",
+    "pandas-market-calendars": "5.4.0",
+    "pyarrow": "25.0.1",
+    "yfinance": "1.6.0"
+  },
+  "run_date": "2026-08-24",
+  "run_id": "run_20260825T024937Z",
+  "started_utc": "2026-08-25T02:49:37Z",
+  "symbols_attempted": 3467,
+  "symbols_retried": [
+    "CROX",
+    "PAAS"
+  ],
+  "symbols_skipped_resume": 0
+}
