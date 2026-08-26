@@ -149,7 +149,7 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
-          DROPBOX_REMOTE_ROOT: /Claude/DailyStockSnapshots
+          DROPBOX_REMOTE_ROOT: /DailyStockSnapshots
           RUN_DATE: ${{ steps.partition.outputs.date }}
         run: |
           if [ -z "$DROPBOX_APP_KEY" ] || [ -z "$DROPBOX_APP_SECRET" ] || [ -z "$DROPBOX_REFRESH_TOKEN" ]; then

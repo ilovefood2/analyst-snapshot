@@ -124,7 +124,7 @@ SNAPSHOT_DIR=./archive
 UNIVERSE_FILE=./universe.txt
 SYMBOL_DELAY_SECONDS=0.5
 LOG_DIR=./logs
-DROPBOX_REMOTE_ROOT=/Claude/DailyStockSnapshots
+DROPBOX_REMOTE_ROOT=/DailyStockSnapshots
 ```
 
 `UNIVERSE_FILE` should contain one ticker per line. Blank lines and `#` comments are ignored.
@@ -360,20 +360,20 @@ job always passes the date it just wrote.
 By default, Dropbox files are uploaded under:
 
 ```text
-/Claude/DailyStockSnapshots/date=YYYY-MM-DD/<dataset>/data.parquet
+/DailyStockSnapshots/date=YYYY-MM-DD/<dataset>/data.parquet
 ```
 
 For example:
 
 ```text
-/Claude/DailyStockSnapshots/date=2026-07-04/recommendations/data.parquet
-/Claude/DailyStockSnapshots/date=2026-07-04/analyst_price_targets/data.parquet
+/DailyStockSnapshots/date=2026-07-04/recommendations/data.parquet
+/DailyStockSnapshots/date=2026-07-04/analyst_price_targets/data.parquet
 ```
 
 Newly first-seen rating events are uploaded as date-partitioned point-in-time files:
 
 ```text
-/Claude/DailyStockSnapshots/date=YYYY-MM-DD/rating_events/data.parquet
+/DailyStockSnapshots/date=YYYY-MM-DD/rating_events/data.parquet
 ```
 
 The cumulative `archive/_index/rating_events.parquet` file is a derived dedupe index. Dropbox

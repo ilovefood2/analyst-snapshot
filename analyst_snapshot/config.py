@@ -23,5 +23,5 @@ def load_config() -> Config:
         universe_file=Path(os.getenv("UNIVERSE_FILE", "./universe.txt")),
         logs_dir=Path(os.getenv("LOG_DIR", "./logs")),
         symbol_delay_seconds=float(os.getenv("SYMBOL_DELAY_SECONDS", "0.5")),
-        dropbox_remote_root=os.getenv("DROPBOX_REMOTE_ROOT", "/Claude/DailyStockSnapshots"),
+        dropbox_remote_root=os.getenv("DROPBOX_REMOTE_ROOT", "/DailyStockSnapshots"),
     )

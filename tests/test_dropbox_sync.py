@@ -23,9 +23,9 @@ def test_remote_path_for_file_sorts_snapshots_by_date(tmp_path: Path) -> None:
     file_path.parent.mkdir(parents=True)
     file_path.write_text("x", encoding="utf-8")
 
-    remote_path = remote_path_for_file(archive_dir, file_path, "/Claude/DailyStockSnapshots")
+    remote_path = remote_path_for_file(archive_dir, file_path, "/DailyStockSnapshots")
 
-    assert remote_path == "/Claude/DailyStockSnapshots/date=2026-07-04/recommendations/data.parquet"
+    assert remote_path == "/DailyStockSnapshots/date=2026-07-04/recommendations/data.parquet"
 
 
 def test_remote_path_for_file_skips_non_date_derived_files(tmp_path: Path) -> None:
@@ -34,7 +34,7 @@ def test_remote_path_for_file_skips_non_date_derived_files(tmp_path: Path) -> No
     file_path.parent.mkdir(parents=True)
     file_path.write_text("x", encoding="utf-8")
 
-    remote_path = remote_path_for_file(archive_dir, file_path, "/Claude/DailyStockSnapshots")
+    remote_path = remote_path_for_file(archive_dir, file_path, "/DailyStockSnapshots")
 
     assert remote_path is None
 
@@ -45,9 +45,9 @@ def test_remote_path_for_file_sorts_first_seen_events_by_date(tmp_path: Path) ->
     file_path.parent.mkdir(parents=True)
     file_path.write_text("x", encoding="utf-8")
 
-    remote_path = remote_path_for_file(archive_dir, file_path, "/Claude/DailyStockSnapshots")
+    remote_path = remote_path_for_file(archive_dir, file_path, "/DailyStockSnapshots")
 
-    assert remote_path == "/Claude/DailyStockSnapshots/date=2026-07-04/rating_events/data.parquet"
+    assert remote_path == "/DailyStockSnapshots/date=2026-07-04/rating_events/data.parquet"
 
 
 def test_auth_url_secret_loading_only_requires_app_key(monkeypatch) -> None:
