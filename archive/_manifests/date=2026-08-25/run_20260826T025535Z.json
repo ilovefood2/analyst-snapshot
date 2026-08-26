@@ -1,0 +1,74 @@
+{
+  "analyst_snapshot_version": "0.2.0",
+  "datasets": {
+    "analyst_price_targets": {
+      "path": "archive/analyst_price_targets/date=2026-08-25/data.parquet",
+      "rows_written": 3465,
+      "symbols_no_coverage": 21
+    },
+    "earnings": {
+      "path": "archive/earnings/date=2026-08-25/data.parquet",
+      "rows_written": 74778,
+      "symbols_no_coverage": 0
+    },
+    "estimates": {
+      "path": "archive/estimates/date=2026-08-25/data.parquet",
+      "rows_written": 52050,
+      "symbols_no_coverage": 58
+    },
+    "holders": {
+      "path": "archive/holders/date=2026-08-25/data.parquet",
+      "rows_written": 277134,
+      "symbols_no_coverage": 1
+    },
+    "profile": {
+      "path": "archive/profile/date=2026-08-25/data.parquet",
+      "rows_written": 3465,
+      "symbols_no_coverage": 0
+    },
+    "recommendations": {
+      "path": "archive/recommendations/date=2026-08-25/data.parquet",
+      "rows_written": 11839,
+      "symbols_no_coverage": 247
+    },
+    "shares_outstanding": {
+      "path": "archive/shares_outstanding/date=2026-08-25/data.parquet",
+      "rows_written": 477856,
+      "symbols_no_coverage": 25
+    },
+    "upgrades_downgrades": {
+      "path": "archive/upgrades_downgrades/date=2026-08-25/data.parquet",
+      "rows_written": 398527,
+      "symbols_no_coverage": 227
+    }
+  },
+  "events_added": 161,
+  "failures": [
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "ERII"
+    },
+    {
+      "error": "Failed to perform, curl: (16) . See https://curl.se/libcurl/c/libcurl-errors.html first for more details.",
+      "retry": "False",
+      "symbol": "SHEN"
+    }
+  ],
+  "finished_utc": "2026-08-26T04:28:15Z",
+  "package_versions": {
+    "pandas": "3.0.5",
+    "pandas-market-calendars": "5.4.0",
+    "pyarrow": "25.0.1",
+    "yfinance": "1.6.0"
+  },
+  "run_date": "2026-08-25",
+  "run_id": "run_20260826T025535Z",
+  "started_utc": "2026-08-26T02:55:35Z",
+  "symbols_attempted": 3467,
+  "symbols_retried": [
+    "ERII",
+    "SHEN"
+  ],
+  "symbols_skipped_resume": 0
+}
