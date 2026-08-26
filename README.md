@@ -34,6 +34,31 @@ what turns a current-only universe into a point-in-time one.
 Price and volume are deliberately **not** captured: they are reconstructable from any provider at
 any time, so a daily snapshot of them buys nothing.
 
+## Free Prospective Market Context
+
+The cloud job also captures three small, official, no-key datasets before the multi-hour Yahoo
+loop. These are point-in-time research inputs for market-turn probabilities, not trading signals:
+
+| Archive folder | Official source | What it measures | Important limitation |
+| --- | --- | --- | --- |
+| `cftc_tff_positioning` | CFTC Traders in Financial Futures | Dealer, asset-manager and leveraged-money positions in Nasdaq-100 and S&P 500 futures | Weekly and publication-lagged |
+| `occ_account_volume` | OCC Volume Query | QQQ/SPY option volume by customer, firm and market-maker account type, call/put and exchange | No buy/sell or open/close classification |
+| `finra_short_volume` | FINRA Reg SHO daily files | Consolidated NMS short, short-exempt and total volume | Short-sale flow is not participant identity |
+
+Cboe Open-Close is deliberately not fetched: it is a paid proprietary product. The collector
+never uses FMP, IBKR, Databento or another paid API and records `incremental_cash_usd=0`.
+
+Run and verify the free capture manually:
+
+```bash
+python -m analyst_snapshot market-context --resume --run-date 2026-08-24 --symbols QQQ,SPY
+python -m analyst_snapshot verify-market-context --run-date 2026-08-24
+```
+
+Normalized rows use the snapshot partition date, while `source_date` records the report/trade date
+inside the official source. `snapshot_utc` remains the only authority for when the data became
+observable. Exact source responses and hashes are retained under `archive/_market_context_sources/`.
+
 Daily snapshots are written to:
 
 ```text

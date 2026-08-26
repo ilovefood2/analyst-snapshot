@@ -13,6 +13,7 @@ from analyst_snapshot.dropbox_sync import (
     upload_directory,
 )
 from analyst_snapshot.logging_utils import JsonlLogger
+from analyst_snapshot.market_context import run_market_context, verify_market_context
 from analyst_snapshot.reader import archive_summary
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
 from analyst_snapshot.storage import compact_rating_events, rebuild_rating_events_index
@@ -57,6 +58,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit non-zero when any dataset covers less than this fraction of the universe.",
     )
     verify_parser.add_argument("--json-out", help="Also write the report to this path.")
+
+    market_parser = subparsers.add_parser(
+        "market-context",
+        help="Capture free official CFTC/OCC/FINRA prospective market context.",
+    )
+    market_parser.add_argument("--run-date", required=True, help="Snapshot partition date.")
+    market_parser.add_argument("--symbols", default="QQQ,SPY")
+    market_parser.add_argument("--resume", action="store_true")
+
+    verify_market_parser = subparsers.add_parser(
+        "verify-market-context",
+        help="Verify market-context source freshness, hashes, and required scopes.",
+    )
+    verify_market_parser.add_argument("--run-date", required=True)
+    verify_market_parser.add_argument("--json-out")
 
     subparsers.add_parser("compact", help="Drop duplicate keys from the rating-event index.")
     subparsers.add_parser(
@@ -130,6 +146,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = load_config()
+
+    if args.command == "market-context":
+        symbols = tuple(
+            symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip()
+        )
+        result = run_market_context(
+            config.snapshot_dir,
+            run_date=args.run_date,
+            symbols=symbols,
+            resume=args.resume,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result.get("status") == "complete" else 1
+
+    if args.command == "verify-market-context":
+        report = verify_market_context(config.snapshot_dir, run_date=args.run_date)
+        rendered = json.dumps(report, indent=2, sort_keys=True)
+        print(rendered)
+        if args.json_out:
+            Path(args.json_out).write_text(rendered + "\n", encoding="utf-8")
+        return 0 if report["ok"] else 1
 
     if args.command == "verify":
         return print_coverage_report(

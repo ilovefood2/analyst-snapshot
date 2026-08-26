@@ -22,10 +22,15 @@ from typing import Any
 import pandas as pd
 import pyarrow.dataset as pa_ds
 
-from analyst_snapshot.datasets import DATASETS, LEGACY_EVENT_COLUMNS, RATING_EVENTS_DATASET
+from analyst_snapshot.datasets import (
+    DATASETS,
+    LEGACY_EVENT_COLUMNS,
+    MARKET_CONTEXT_DATASETS,
+    RATING_EVENTS_DATASET,
+)
 from analyst_snapshot.storage import partition_paths, read_rating_events_index
 
-SNAPSHOT_DATASETS = tuple(spec.name for spec in DATASETS.values())
+SNAPSHOT_DATASETS = (*tuple(spec.name for spec in DATASETS.values()), *MARKET_CONTEXT_DATASETS)
 EVENT_DATASETS = ("upgrades_downgrades", RATING_EVENTS_DATASET)
 TRADING_DATE_COLUMN = "trading_date"
 

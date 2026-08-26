@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "analyst-snapshot"
-version = "0.2.0"
+version = "0.3.0"
 description = "Daily point-in-time snapshots of Yahoo Finance analyst data for ML research."
 requires-python = ">=3.12"
 dependencies = [

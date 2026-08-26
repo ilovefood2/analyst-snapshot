@@ -16,8 +16,13 @@ archive/
   holders/date=YYYY-MM-DD/data.parquet
   shares_outstanding/date=YYYY-MM-DD/data.parquet
   rating_events/date=YYYY-MM-DD/data.parquet
+  cftc_tff_positioning/date=YYYY-MM-DD/data.parquet
+  finra_short_volume/date=YYYY-MM-DD/data.parquet
+  occ_account_volume/date=YYYY-MM-DD/data.parquet
   _index/rating_events.parquet
   _manifests/date=YYYY-MM-DD/run_<timestamp>.json
+  _market_context_manifests/date=YYYY-MM-DD/manifest.json
+  _market_context_sources/date=YYYY-MM-DD/*
 ```
 
 `archive/<dataset>/` is a hive-partitioned Parquet dataset and can be opened directly:
@@ -51,6 +56,11 @@ They are not the same instant, and the gap has changed over the life of the arch
 D's close" leaks future information — for the early partitions, it leaks an entire overnight
 session including the next morning's pre-market rating changes.
 
+The rule is equally strict for market context. `source_date` is the date inside the CFTC report or
+FINRA/OCC activity file; it is **not** when that file became observable. A row may therefore have
+`source_date < trading_date`, while `snapshot_utc` records the honest collection time. Never
+backdate availability to `source_date`.
+
 `analyst_snapshot.reader` enforces this with an `as_of` argument:
 
 ```python
@@ -65,7 +75,7 @@ features = latest_as_of(
 A day on which Yahoo reported no coverage does not erase the previous value; the last real
 observation within `lookback_days` is returned instead.
 
-## Columns present on every dataset
+## Columns present on every Yahoo dataset
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -177,6 +187,26 @@ the earliest snapshot the event appeared in.
 > were deliberately not rewritten, because prior dates are never modified. If you need first-seen
 > dates for events before 2026-08-19, derive them from `upgrades_downgrades` rather than from the
 > `rating_events` partitions.
+
+### Free market-context datasets
+
+All three datasets include `symbol`, `snapshot_utc`, `dataset`, `run_id`, `source_date`,
+`source_url`, `source_sha256` and `source_lag_days`.
+
+- `cftc_tff_positioning`: two rows per capture (`NASDAQ100`, `SP500`) with open interest, long,
+  short and spreading positions for dealer, asset-manager and leveraged-money categories, plus
+  net shares. The report is weekly.
+- `finra_short_volume`: the complete Consolidated NMS daily file, one row per FINRA symbol, with
+  short, short-exempt and total volume. It is an order-flow proxy, not a participant classifier.
+- `occ_account_volume`: raw QQQ/SPY rows by option root, exchange, account type (`C`, `F`, `M`) and
+  call/put. OCC account type is genuine clearing capacity but provides neither aggressor side nor
+  opening/closing position. With `latest_as_of`, use
+  `group_extra=("option_symbol", "exchange", "account_type_code", "call_put_code")` so the
+  multi-row structure is not collapsed to one row per underlying.
+
+`_market_context_sources` preserves compressed official responses. The per-date manifest binds
+their source and stored hashes to each normalized Parquet output. Files under underscore-prefixed
+directories are provenance, not Parquet snapshot datasets.
 
 ## Known quirks
 

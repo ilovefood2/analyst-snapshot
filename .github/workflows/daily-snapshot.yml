@@ -47,6 +47,10 @@ jobs:
       # Fail the build when any dataset covers less than this share of the universe. The data is
       # committed before this gate runs, so a red build never costs a day of history.
       MIN_COVERAGE: "0.95"
+      # Free official prospective context only. Cboe Open-Close is intentionally excluded because
+      # it is a paid proprietary product; OCC provides account-type volume without buy/sell or
+      # open/close, CFTC provides weekly trader categories, and FINRA provides short-sale volume.
+      MARKET_CONTEXT_SYMBOLS: QQQ,SPY
 
     steps:
       - name: Check out repository
@@ -80,6 +84,21 @@ jobs:
           OVERRIDE: ${{ inputs.run_date || '' }}
           TRADING_DATE: ${{ steps.calendar.outputs.trading_date }}
         run: echo "date=${OVERRIDE:-$TRADING_DATE}" >> "$GITHUB_OUTPUT"
+
+      # Run this small capture before the multi-hour Yahoo loop so the irreplaceable point-in-time
+      # market context survives even when Yahoo consumes the remaining job budget. Any partial
+      # capture is committed below and verify-market-context makes the workflow red afterward.
+      - name: Capture free prospective market context
+        if: steps.calendar.outputs.run == 'true'
+        timeout-minutes: 10
+        continue-on-error: true
+        env:
+          RUN_DATE: ${{ steps.partition.outputs.date }}
+        run: |
+          python -m analyst_snapshot market-context \
+            --resume \
+            --run-date "$RUN_DATE" \
+            --symbols "$MARKET_CONTEXT_SYMBOLS"
 
       - name: Run analyst snapshot
         if: steps.calendar.outputs.run == 'true'
@@ -155,6 +174,15 @@ jobs:
           python -m analyst_snapshot verify \
             --run-date "$RUN_DATE" \
             --json-out "verify-$RUN_DATE.json" $gate_arg
+
+      - name: Verify prospective market context
+        if: always() && steps.calendar.outputs.run == 'true'
+        env:
+          RUN_DATE: ${{ steps.partition.outputs.date }}
+        run: |
+          python -m analyst_snapshot verify-market-context \
+            --run-date "$RUN_DATE" \
+            --json-out "verify-market-context-$RUN_DATE.json"
 
       - name: Upload verify report
         if: always() && steps.calendar.outputs.run == 'true'
