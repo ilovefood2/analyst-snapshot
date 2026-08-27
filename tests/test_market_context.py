@@ -13,9 +13,10 @@ from analyst_snapshot.market_context import (
     CFTC_DATASET,
     CFTC_POSITION_COLUMNS,
     FINRA_DATASET,
-    MarketContextError,
     OCC_DATASET,
+    MarketContextError,
     SourceUnavailable,
+    collect_occ,
     manifest_path,
     parse_occ_account_volume,
     run_market_context,
@@ -245,3 +246,68 @@ def test_occ_schema_drift_still_fails_hard() -> None:
         assert "schema changed" in str(exc)
     else:
         raise AssertionError("schema drift must not be treated as unavailable")
+
+
+class SoftErrorPageOccSources(FakeSources):
+    """A 200 soft-error page that happens to contain commas, so it parses as CSV.
+
+    This is the general shape of the outage: the sentinel/comma guard in the parser
+    cannot catch every future soft error, so the retry loop itself must advance.
+    """
+
+    def __init__(self, run_date: date, published_date: date) -> None:
+        super().__init__(run_date)
+        self.published_date = published_date
+
+    def __call__(self, url: str) -> bytes:
+        if "marketdata.theocc.com" not in url:
+            return super().__call__(url)
+        self.urls.append(url)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        if query["reportDate"] != [self.published_date.strftime("%Y%m%d")]:
+            return b"<html>,<body>,Service temporarily unavailable,</body>,</html>"
+        return _occ_csv(query["symbol"][0], self.published_date)
+
+
+def test_occ_soft_error_page_does_not_end_the_lookback(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    run_date = date(2026, 8, 25)
+    published = date(2026, 8, 24)
+    sources = SoftErrorPageOccSources(run_date, published)
+
+    result = run_market_context(
+        archive,
+        run_date=run_date.isoformat(),
+        symbols=("QQQ", "SPY"),
+        resume=True,
+        fetcher=sources,
+        snapshot_utc="2026-08-25T04:00:00Z",
+        run_identifier="market_soft_error_test",
+    )
+
+    assert result["status"] == "complete"
+    assert result["sources"][OCC_DATASET]["source_date"] == published.isoformat()
+    assert verify_market_context(archive, run_date=run_date.isoformat())["ok"] is True
+
+
+def test_occ_drift_on_every_candidate_still_fails_hard(tmp_path: Path) -> None:
+    """Real schema drift must not be laundered into a soft 'unavailable'."""
+
+    def always_drifted(_url: str) -> bytes:
+        return b"quantity,underlying,symbol,actype,porc,exchange\n1,QQQ,QQQ,C,C,CBOE\n"
+
+    try:
+        collect_occ(
+            tmp_path,
+            date(2026, 8, 25),
+            "2026-08-25T04:00:00Z",
+            "drift_all_test",
+            always_drifted,
+            ("QQQ",),
+        )
+    except MarketContextError as exc:
+        assert not isinstance(exc, SourceUnavailable)
+        assert "schema changed" in str(exc)
+    else:
+        raise AssertionError("exhausted drift must fail hard")
+

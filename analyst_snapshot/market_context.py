@@ -15,7 +15,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pandas as pd
 
@@ -432,6 +432,22 @@ def _occ_url(symbol: str, source_date: date) -> str:
     return f"{OCC_URL}?{query}"
 
 
+def _exhausted(label: str, failures: list[MarketContextError]) -> NoReturn:
+    """Every candidate failed.
+
+    A retry loop must advance on any candidate that did not yield usable data, not
+    only on the ones the upstream happened to label 403/404. OCC, for one, answers an
+    unpublished date with HTTP 200 and a bare sentence. But exhausting every candidate
+    for a non-availability reason is contract drift, so surface that over plain
+    unavailability and let it fail the run.
+    """
+    for failure in failures:
+        if not isinstance(failure, SourceUnavailable):
+            raise failure
+    last = failures[-1] if failures else "no candidate dates"
+    raise SourceUnavailable(f"{label} unavailable: {last}")
+
+
 def collect_cftc(
     snapshot_dir: Path,
     run_date: date,
@@ -439,7 +455,7 @@ def collect_cftc(
     run_id: str,
     fetcher: FetchBytes,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    last_error: Exception | None = None
+    failures: list[MarketContextError] = []
     for year in (run_date.year, run_date.year - 1):
         url = CFTC_URL.format(year=year)
         try:
@@ -459,9 +475,9 @@ def collect_cftc(
                 gzip_payload=False,
             )
             return rows, {"source_date": source_date.isoformat(), "url": url, "captures": [capture]}
-        except SourceUnavailable as exc:
-            last_error = exc
-    raise SourceUnavailable(f"CFTC TFF unavailable: {last_error}")
+        except MarketContextError as exc:
+            failures.append(exc)
+    _exhausted("CFTC TFF", failures)
 
 
 def collect_finra(
@@ -471,7 +487,7 @@ def collect_finra(
     run_id: str,
     fetcher: FetchBytes,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    last_error: Exception | None = None
+    failures: list[MarketContextError] = []
     for source_date in _candidate_dates(run_date):
         url = FINRA_URL.format(ymd=source_date.strftime("%Y%m%d"))
         try:
@@ -497,9 +513,9 @@ def collect_finra(
                 "url": url,
                 "captures": [capture],
             }
-        except SourceUnavailable as exc:
-            last_error = exc
-    raise SourceUnavailable(f"FINRA CNMS unavailable: {last_error}")
+        except MarketContextError as exc:
+            failures.append(exc)
+    _exhausted("FINRA CNMS", failures)
 
 
 def collect_occ(
@@ -510,7 +526,7 @@ def collect_occ(
     fetcher: FetchBytes,
     symbols: tuple[str, ...],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    last_error: Exception | None = None
+    failures: list[MarketContextError] = []
     for source_date in _candidate_dates(run_date):
         rows: list[dict[str, Any]] = []
         captures: list[dict[str, Any]] = []
@@ -546,9 +562,9 @@ def collect_occ(
                 "captures": captures,
                 "symbols": list(symbols),
             }
-        except SourceUnavailable as exc:
-            last_error = exc
-    raise SourceUnavailable(f"OCC account volume unavailable: {last_error}")
+        except MarketContextError as exc:
+            failures.append(exc)
+    _exhausted("OCC account volume", failures)
 
 
 def manifest_path(snapshot_dir: Path, run_date: str) -> Path:
