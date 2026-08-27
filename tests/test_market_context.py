@@ -13,9 +13,11 @@ from analyst_snapshot.market_context import (
     CFTC_DATASET,
     CFTC_POSITION_COLUMNS,
     FINRA_DATASET,
+    MarketContextError,
     OCC_DATASET,
     SourceUnavailable,
     manifest_path,
+    parse_occ_account_volume,
     run_market_context,
     verify_market_context,
 )
@@ -176,3 +178,70 @@ def test_verify_detects_raw_capture_tampering(tmp_path: Path) -> None:
 
     assert report["ok"] is False
     assert any("hash mismatch" in error for error in report["errors"])
+
+
+class UnpublishedOccSources(FakeSources):
+    """OCC answers an unpublished date with HTTP 200 and a bare sentence, not CSV."""
+
+    def __init__(self, run_date: date, published_date: date) -> None:
+        super().__init__(run_date)
+        self.published_date = published_date
+
+    def __call__(self, url: str) -> bytes:
+        if "marketdata.theocc.com" not in url:
+            return super().__call__(url)
+        self.urls.append(url)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        requested = query["reportDate"][0]
+        if requested > self.published_date.strftime("%Y%m%d"):
+            return b"Report date cannot be greater than %s" % (
+                self.published_date.strftime("%m/%d/%Y").encode()
+            )
+        if requested < self.published_date.strftime("%Y%m%d"):
+            return b"No record(s) found"
+        return _occ_csv(query["symbol"][0], self.published_date)
+
+
+def test_occ_unpublished_date_falls_back_to_the_published_one(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    run_date = date(2026, 8, 25)
+    published = date(2026, 8, 24)
+    sources = UnpublishedOccSources(run_date, published)
+
+    result = run_market_context(
+        archive,
+        run_date=run_date.isoformat(),
+        symbols=("QQQ", "SPY"),
+        resume=True,
+        fetcher=sources,
+        snapshot_utc="2026-08-25T04:00:00Z",
+        run_identifier="market_unpublished_test",
+    )
+
+    assert result["status"] == "complete"
+    assert result["sources"][OCC_DATASET]["source_date"] == published.isoformat()
+
+    occ = pd.read_parquet(dataset_path(archive, OCC_DATASET, run_date.isoformat()))
+    assert set(occ["symbol"]) == {"QQQ", "SPY"}
+    assert set(occ["account_type_code"]) == {"C", "F", "M"}
+
+    report = verify_market_context(archive, run_date=run_date.isoformat())
+    assert report["ok"] is True
+
+
+def test_occ_schema_drift_still_fails_hard() -> None:
+    drifted = b"quantity,underlying,symbol,actype,porc,exchange\n1,QQQ,QQQ,C,C,CBOE\n"
+    try:
+        parse_occ_account_volume(
+            drifted,
+            symbol="QQQ",
+            run_date=date(2026, 8, 25),
+            snapshot_utc="2026-08-25T04:00:00Z",
+            run_id="drift_test",
+            source_url="https://marketdata.theocc.com/volume-query?x=1",
+        )
+    except MarketContextError as exc:
+        assert not isinstance(exc, SourceUnavailable)
+        assert "schema changed" in str(exc)
+    else:
+        raise AssertionError("schema drift must not be treated as unavailable")

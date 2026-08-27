@@ -53,6 +53,12 @@ CFTC_POSITION_COLUMNS = {
 }
 OCC_ACCOUNT_TYPES = {"C": "customer", "F": "firm", "M": "market_maker"}
 OCC_CALL_PUT = {"C": "call", "P": "put"}
+# OCC answers an unpublished report date with HTTP 200 and a bare sentence, not CSV.
+# These are "not published yet", not schema drift, so the lookback loop must advance.
+OCC_NOT_PUBLISHED_MARKERS = (
+    "no record(s) found",
+    "report date cannot be greater than",
+)
 SOURCE_LAG_LIMITS = {CFTC_DATASET: 14, FINRA_DATASET: 4, OCC_DATASET: 4}
 
 FetchBytes = Callable[[str], bytes]
@@ -328,6 +334,14 @@ def parse_occ_account_volume(
     source_url: str,
 ) -> tuple[list[dict[str, Any]], date]:
     text = payload.decode("utf-8-sig", errors="strict")
+    header = text.splitlines()[0].strip() if text.strip() else ""
+    lowered = header.lower()
+    if (
+        not header
+        or "," not in header
+        or any(marker in lowered for marker in OCC_NOT_PUBLISHED_MARKERS)
+    ):
+        raise SourceUnavailable(f"OCC has not published {symbol}: {header[:80]!r}")
     reader = csv.DictReader(io.StringIO(text))
     expected = {"quantity", "underlying", "symbol", "actype", "porc", "exchange", "actdate"}
     if not reader.fieldnames or set(reader.fieldnames) != expected:
