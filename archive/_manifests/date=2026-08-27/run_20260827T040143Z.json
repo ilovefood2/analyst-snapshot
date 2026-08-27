@@ -1,0 +1,158 @@
+{
+  "analyst_snapshot_version": "0.2.0",
+  "datasets": {
+    "analyst_price_targets": {
+      "path": "archive/analyst_price_targets/date=2026-08-27/data.parquet",
+      "rows_written": 3465,
+      "symbols_no_coverage": 20
+    },
+    "earnings": {
+      "path": "archive/earnings/date=2026-08-27/data.parquet",
+      "rows_written": 74804,
+      "symbols_no_coverage": 1
+    },
+    "estimates": {
+      "path": "archive/estimates/date=2026-08-27/data.parquet",
+      "rows_written": 52158,
+      "symbols_no_coverage": 22
+    },
+    "holders": {
+      "path": "archive/holders/date=2026-08-27/data.parquet",
+      "rows_written": 278561,
+      "symbols_no_coverage": 2
+    },
+    "profile": {
+      "path": "archive/profile/date=2026-08-27/data.parquet",
+      "rows_written": 3465,
+      "symbols_no_coverage": 0
+    },
+    "recommendations": {
+      "path": "archive/recommendations/date=2026-08-27/data.parquet",
+      "rows_written": 11869,
+      "symbols_no_coverage": 242
+    },
+    "shares_outstanding": {
+      "path": "archive/shares_outstanding/date=2026-08-27/data.parquet",
+      "rows_written": 477378,
+      "symbols_no_coverage": 26
+    },
+    "upgrades_downgrades": {
+      "path": "archive/upgrades_downgrades/date=2026-08-27/data.parquet",
+      "rows_written": 399221,
+      "symbols_no_coverage": 227
+    }
+  },
+  "events_added": 147,
+  "failures": [
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "AVXL"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "BAK"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "BHC"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "BMA"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "CGNT"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "JMIA"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "KRT"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "MRCY"
+    },
+    {
+      "error": "Failed to perform, curl: (16) . See https://curl.se/libcurl/c/libcurl-errors.html first for more details.",
+      "retry": "False",
+      "symbol": "OCUL"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "PGR"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "PRE"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "PRMB"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "QXO"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "RYAN"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "UAA"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "VNO"
+    }
+  ],
+  "finished_utc": "2026-08-27T05:57:15Z",
+  "package_versions": {
+    "pandas": "3.0.5",
+    "pandas-market-calendars": "5.4.0",
+    "pyarrow": "25.0.1",
+    "yfinance": "1.7.0"
+  },
+  "run_date": "2026-08-27",
+  "run_id": "run_20260827T040143Z",
+  "started_utc": "2026-08-27T04:01:43Z",
+  "symbols_attempted": 3481,
+  "symbols_retried": [
+    "AVXL",
+    "BAK",
+    "BHC",
+    "BMA",
+    "CGNT",
+    "JMIA",
+    "KRT",
+    "MRCY",
+    "OCUL",
+    "PGR",
+    "PRE",
+    "PRMB",
+    "QXO",
+    "RYAN",
+    "UAA",
+    "VNO"
+  ],
+  "symbols_skipped_resume": 0
+}

@@ -1,0 +1,71 @@
+{
+  "errors": [
+    {
+      "error": "OCC volume-query schema changed",
+      "error_type": "MarketContextError",
+      "source": "occ_account_volume"
+    }
+  ],
+  "free_public_sources_only": true,
+  "incremental_cash_usd": 0.0,
+  "network_workers": 1,
+  "participant_data_scope": {
+    "cboe_open_close": "not collected because it is paid proprietary data",
+    "cftc": "actual futures trader categories; weekly and publication-lagged",
+    "finra": "actual consolidated short-sale volume; not participant identity",
+    "occ": "actual options clearing account type; no buy/sell or open/close fields"
+  },
+  "run_date": "2026-08-27",
+  "run_id": "market_context_20260827T040141Z",
+  "schema": "analyst_snapshot_market_context_manifest_v1",
+  "snapshot_utc": "2026-08-27T04:01:41Z",
+  "sources": {
+    "cftc_tff_positioning": {
+      "captures": [
+        {
+          "encoding": "identity",
+          "path": "_market_context_sources/date=2026-08-27/cftc_tff_2026.zip",
+          "source_bytes": 459690,
+          "source_sha256": "fa2d2f664e11f641039d41ef6b958f615bdabeb5c908c9e7d8dbb7719d94778a",
+          "stored_bytes": 459690,
+          "stored_sha256": "fa2d2f664e11f641039d41ef6b958f615bdabeb5c908c9e7d8dbb7719d94778a"
+        }
+      ],
+      "output": {
+        "path": "cftc_tff_positioning/date=2026-08-27/data.parquet",
+        "rows": 2,
+        "sha256": "2d0cfb0889897c63c0086c0fc40e5bbbc39c6c5963c90f33f2dbedac95bce880"
+      },
+      "source_date": "2026-08-18",
+      "status": "ok",
+      "url": "https://www.cftc.gov/files/dea/history/fut_fin_txt_2026.zip"
+    },
+    "finra_short_volume": {
+      "captures": [
+        {
+          "encoding": "gzip",
+          "path": "_market_context_sources/date=2026-08-27/finra_CNMSshvol20260826.txt.gz",
+          "source_bytes": 535566,
+          "source_sha256": "0704767503054752342ff878c97077e695e462e5fce4a357f269bbb091f2e3d1",
+          "stored_bytes": 205554,
+          "stored_sha256": "b157946ebd0584a0a9da9f259f6a80aa9d9c72f63267729bcea352cc87d20ad2"
+        }
+      ],
+      "output": {
+        "path": "finra_short_volume/date=2026-08-27/data.parquet",
+        "rows": 12241,
+        "sha256": "5e521b810a17b127869b3cd17960db4c972dc6fc3b489b5a90e88da8d553975a"
+      },
+      "source_date": "2026-08-26",
+      "status": "ok",
+      "url": "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20260826.txt"
+    },
+    "occ_account_volume": {
+      "error": "OCC volume-query schema changed",
+      "error_type": "MarketContextError",
+      "source": "occ_account_volume",
+      "status": "failed"
+    }
+  },
+  "status": "partial"
+}
