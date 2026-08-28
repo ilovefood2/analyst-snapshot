@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Run even if the checked date was not an NYSE trading day"
+        description: "Legacy smoke-only flag; it never bypasses completed-session publication gates"
         required: false
         default: "false"
         type: choice
@@ -21,9 +21,17 @@ on:
         required: false
         default: ""
       run_date:
-        description: "Optional YYYY-MM-DD partition date override for a backfill"
+        description: "Optional completed XNYS session YYYY-MM-DD"
         required: false
         default: ""
+      fresh:
+        description: "Use an isolated fresh archive; required to replace an invalid/pre-close run"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: write
@@ -65,25 +73,43 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Decide whether to run
+      - name: Resolve latest completed XNYS session
         id: calendar
         env:
-          FORCE_RUN: ${{ inputs.force || 'false' }}
+          OVERRIDE: ${{ inputs.run_date || '' }}
         run: |
-          force_arg=""
-          if [ "$FORCE_RUN" = "true" ]; then
-            force_arg="--force"
+          session_arg=""
+          if [ -n "$OVERRIDE" ]; then
+            session_arg="--session-date $OVERRIDE"
           fi
-          python -m analyst_snapshot should-run --offset-days 0 \
-            --github-output "$GITHUB_OUTPUT" $force_arg
+          python -m analyst_snapshot should-run \
+            --github-output "$GITHUB_OUTPUT" $session_arg
 
-      - name: Resolve partition date
-        id: partition
+      - name: Select isolated or resumable archive
+        id: workspace
         if: steps.calendar.outputs.run == 'true'
         env:
-          OVERRIDE: ${{ inputs.run_date || '' }}
-          TRADING_DATE: ${{ steps.calendar.outputs.trading_date }}
-        run: echo "date=${OVERRIDE:-$TRADING_DATE}" >> "$GITHUB_OUTPUT"
+          FRESH: ${{ inputs.fresh || 'false' }}
+        run: |
+          if [ "$FRESH" = "true" ]; then
+            snapshot_dir="$RUNNER_TEMP/analyst-recovery/archive"
+            mkdir -p "$snapshot_dir"
+            if [ -d archive/_index ]; then
+              cp -R archive/_index "$snapshot_dir/_index"
+            fi
+            echo "resume_arg=" >> "$GITHUB_OUTPUT"
+          else
+            snapshot_dir="./archive"
+            echo "resume_arg=--resume" >> "$GITHUB_OUTPUT"
+          fi
+          echo "fresh=$FRESH" >> "$GITHUB_OUTPUT"
+          echo "snapshot_dir=$snapshot_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an invalid or not-yet-closed manual session
+        if: inputs.run_date != '' && steps.calendar.outputs.run != 'true'
+        run: |
+          echo "::error::Requested run_date is not a completed XNYS session."
+          exit 1
 
       # Run this small capture before the multi-hour Yahoo loop so the irreplaceable point-in-time
       # market context survives even when Yahoo consumes the remaining job budget. Any partial
@@ -93,10 +119,11 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
         env:
-          RUN_DATE: ${{ steps.partition.outputs.date }}
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+          RESUME_ARG: ${{ steps.workspace.outputs.resume_arg }}
         run: |
-          python -m analyst_snapshot market-context \
-            --resume \
+          python -m analyst_snapshot market-context $RESUME_ARG \
             --run-date "$RUN_DATE" \
             --symbols "$MARKET_CONTEXT_SYMBOLS"
 
@@ -106,12 +133,14 @@ jobs:
         continue-on-error: true
         env:
           SYMBOLS: ${{ inputs.symbols || '' }}
-          RUN_DATE: ${{ steps.partition.outputs.date }}
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+          RESUME_ARG: ${{ steps.workspace.outputs.resume_arg }}
         run: |
           if [ -n "$SYMBOLS" ]; then
-            python -m analyst_snapshot run --resume --run-date "$RUN_DATE" --symbols "$SYMBOLS"
+            python -m analyst_snapshot run $RESUME_ARG --run-date "$RUN_DATE" --symbols "$SYMBOLS"
           else
-            python -m analyst_snapshot run --resume --run-date "$RUN_DATE"
+            python -m analyst_snapshot run $RESUME_ARG --run-date "$RUN_DATE"
           fi
 
       # Committing before verifying keeps a bad-coverage day in the archive: the point-in-time
@@ -120,9 +149,9 @@ jobs:
       # always(): a run that timed out or failed part-way still fetched real data, and re-running
       # with the same --run-date and --resume picks up exactly where it stopped.
       - name: Commit archive updates
-        if: always() && steps.calendar.outputs.run == 'true'
+        if: always() && steps.calendar.outputs.run == 'true' && steps.workspace.outputs.fresh != 'true'
         env:
-          RUN_DATE: ${{ steps.partition.outputs.date }}
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -143,26 +172,14 @@ jobs:
           echo "::error::Could not push the archive after 4 attempts."
           exit 1
 
-      - name: Upload archive to Dropbox
-        if: always() && steps.calendar.outputs.run == 'true'
-        env:
-          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
-          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
-          DROPBOX_REMOTE_ROOT: /DailyStockSnapshots
-          RUN_DATE: ${{ steps.partition.outputs.date }}
-        run: |
-          if [ -z "$DROPBOX_APP_KEY" ] || [ -z "$DROPBOX_APP_SECRET" ] || [ -z "$DROPBOX_REFRESH_TOKEN" ]; then
-            echo "Dropbox secrets are not fully configured; skipping Dropbox upload."
-            exit 0
-          fi
-          python -m analyst_snapshot upload-dropbox --run-date "$RUN_DATE"
-
       - name: Verify snapshot
+        id: verify_analyst
         if: always() && steps.calendar.outputs.run == 'true'
+        continue-on-error: true
         env:
-          RUN_DATE: ${{ steps.partition.outputs.date }}
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
           SYMBOLS: ${{ inputs.symbols || '' }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
         run: |
           # A manual run scoped to a handful of symbols is deliberately partial, so holding it to
           # the universe-wide coverage floor would fail every smoke test.
@@ -176,19 +193,75 @@ jobs:
             --json-out "verify-$RUN_DATE.json" $gate_arg
 
       - name: Verify prospective market context
+        id: verify_market_context
         if: always() && steps.calendar.outputs.run == 'true'
+        continue-on-error: true
         env:
-          RUN_DATE: ${{ steps.partition.outputs.date }}
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
         run: |
           python -m analyst_snapshot verify-market-context \
             --run-date "$RUN_DATE" \
             --json-out "verify-market-context-$RUN_DATE.json"
+
+      - name: Seal completed-session recovery bundle
+        id: seal_recovery
+        if: >-
+          steps.calendar.outputs.run == 'true' &&
+          !inputs.symbols &&
+          steps.verify_analyst.outcome == 'success' &&
+          steps.verify_market_context.outcome == 'success'
+        env:
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+          GENERATION_ID: gh_${{ github.run_id }}_${{ github.run_attempt }}
+        run: |
+          python -m analyst_snapshot seal-recovery-bundle \
+            --run-date "$RUN_DATE" \
+            --generation-id "$GENERATION_ID" \
+            --min-coverage "$MIN_COVERAGE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --git-ref "$GITHUB_REF" \
+            --git-sha "$GITHUB_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --json-out "recovery-bundle-$RUN_DATE.json"
+
+      # Immutable generation files are uploaded first. The small _READY.json authorization pointer
+      # is created only after the exact manifest and every inventoried byte have been accepted.
+      - name: Publish verified recovery bundle to Dropbox
+        id: publish_recovery
+        if: steps.seal_recovery.outcome == 'success'
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_REMOTE_ROOT: /DailyStockSnapshots
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+        run: python -m analyst_snapshot upload-recovery-bundle --run-date "$RUN_DATE"
 
       - name: Upload verify report
         if: always() && steps.calendar.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: verify-report
-          path: verify-*.json
+          path: |
+            verify-*.json
+            recovery-bundle-*.json
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Enforce recovery publication result
+        if: always() && steps.calendar.outputs.run == 'true' && !inputs.symbols
+        env:
+          ANALYST_VERIFY: ${{ steps.verify_analyst.outcome }}
+          MARKET_VERIFY: ${{ steps.verify_market_context.outcome }}
+          SEAL: ${{ steps.seal_recovery.outcome }}
+          PUBLISH: ${{ steps.publish_recovery.outcome }}
+        run: |
+          if [ "$ANALYST_VERIFY" != "success" ] || [ "$MARKET_VERIFY" != "success" ] || \
+             [ "$SEAL" != "success" ] || [ "$PUBLISH" != "success" ]; then
+            echo "::error::Recovery publication failed: analyst=$ANALYST_VERIFY market=$MARKET_VERIFY seal=$SEAL publish=$PUBLISH"
+            exit 1
+          fi

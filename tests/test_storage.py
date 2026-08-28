@@ -17,6 +17,7 @@ from analyst_snapshot.storage import (
     read_parquet_or_empty,
     read_rating_events_index,
     rebuild_rating_events_index,
+    write_parquet,
 )
 
 
@@ -216,3 +217,31 @@ def test_non_finite_string_in_numeric_column_does_not_abort_append(tmp_path: Pat
     assert df.loc[df["symbol"] == "AAPL", "priceToSalesTrailing12Months"].item() == 8.5
     assert pd.isna(df.loc[df["symbol"] == "BXBL", "priceToSalesTrailing12Months"].item())
     assert pq.read_schema(path).field("priceToSalesTrailing12Months").type == "double"
+
+
+def test_atomic_parquet_write_preserves_previous_bytes_on_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from analyst_snapshot import storage
+
+    path = dataset_path(tmp_path, "recommendations", "2026-08-27")
+    write_parquet(
+        path,
+        pd.DataFrame([{"symbol": "AAPL", "snapshot_utc": "t1"}]),
+        "recommendations",
+    )
+    before = path.read_bytes()
+
+    def fail_write(*_args, **_kwargs) -> None:
+        raise OSError("simulated interrupted parquet write")
+
+    monkeypatch.setattr(storage.pq, "write_table", fail_write)
+    with pytest.raises(OSError, match="interrupted"):
+        write_parquet(
+            path,
+            pd.DataFrame([{"symbol": "MSFT", "snapshot_utc": "t2"}]),
+            "recommendations",
+        )
+
+    assert path.read_bytes() == before
+    assert not list(path.parent.glob(f".{path.name}.*"))

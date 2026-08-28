@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from numbers import Real
@@ -76,12 +78,21 @@ def write_parquet(path: Path, df: pd.DataFrame, dataset_name: str) -> None:
     """Write a partition with the dataset's core columns pinned to declared Parquet types."""
     path.parent.mkdir(parents=True, exist_ok=True)
     table = _conform_table(df, dataset_name)
-    pq.write_table(
-        table,
-        path,
-        compression=PARQUET_COMPRESSION,
-        compression_level=PARQUET_COMPRESSION_LEVEL,
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        pq.write_table(
+            table,
+            temporary,
+            compression=PARQUET_COMPRESSION,
+            compression_level=PARQUET_COMPRESSION_LEVEL,
+        )
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _conform_table(df: pd.DataFrame, dataset_name: str) -> pa.Table:

@@ -23,6 +23,7 @@ archive/
   _manifests/date=YYYY-MM-DD/run_<timestamp>.json
   _market_context_manifests/date=YYYY-MM-DD/manifest.json
   _market_context_sources/date=YYYY-MM-DD/*
+  _recovery_manifests/date=YYYY-MM-DD/manifest.json
 ```
 
 `archive/<dataset>/` is a hive-partitioned Parquet dataset and can be opened directly:
@@ -37,6 +38,10 @@ Directories starting with `_` are **not** snapshot data. Parquet dataset readers
 default (`ignore_prefixes=[".", "_"]`), which is why the cumulative index and the run manifests
 live there. Never put a non-partitioned file directly under `archive/<dataset>/`: it gets scanned
 as if it were a partition, and every row it holds is counted twice.
+
+`_recovery_manifests` contains the local `swinglab_recovery_bundle_v1` seal. It is valid only when
+the XNYS session has closed, every inventoried PIT timestamp is post-close, coverage and
+market-context checks pass, and every byte, SHA-256, row count and Arrow schema hash verifies.
 
 ## The two timestamps, and the lookahead rule
 
@@ -207,6 +212,29 @@ All three datasets include `symbol`, `snapshot_utc`, `dataset`, `run_id`, `sourc
 `_market_context_sources` preserves compressed official responses. The per-date manifest binds
 their source and stored hashes to each normalized Parquet output. Files under underscore-prefixed
 directories are provenance, not Parquet snapshot datasets.
+
+## Recovery publication contract
+
+```text
+DailyStockSnapshots/date=YYYY-MM-DD/
+  _READY.json
+  generations/<generation_id>/
+    manifest.json
+    <files named by manifest files[].path>
+```
+
+The producer uploads add-only immutable data files first, the generation manifest next, and the
+date-root `_READY.json` pointer last. Consumers must still materialize/re-download and verify every
+file because a sync client may show metadata before all bytes are local.
+
+`manifest_identity_sha256` hashes canonical compact sorted-key JSON excluding only that field.
+`ready_identity_sha256` uses the same rule for READY. READY also binds the exact pretty-printed
+manifest bytes with `manifest_sha256`. Directory date, READY date, manifest date, XNYS session and
+row PIT timestamps must agree or consumption fails closed.
+
+Historical Yahoo state is not reconstructable. Backfill may repackage contemporaneously archived
+bytes, but a later fetch must keep its true later `snapshot_utc` and cannot masquerade as evidence
+captured for the historical session.
 
 ## Known quirks
 

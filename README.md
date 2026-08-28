@@ -291,19 +291,20 @@ What it does:
 
 - Runs daily at 02:00 UTC. GitHub Actions cron is UTC only, so that is 22:00 in New York during
   EDT and 21:00 during EST — several hours after the close either way. The New York calendar date
-  is resolved in code, so the partition date is correct in both halves of the year.
-- Uses the NYSE calendar to check whether the session that just closed was a trading day.
-- Runs `python -m analyst_snapshot run --resume --run-date <trading_date>` only when it was.
+  is resolved from the latest NYSE `market_close <= actual_start_time`. This remains correct when
+  GitHub delays a job past New York midnight.
+- An explicit manual `run_date` must be a real NYSE session whose exact close has passed. `force`
+  never bypasses this publication gate.
+- Scheduled runs remain resumable. Manual dispatch defaults to `fresh=true`, which uses an isolated
+  archive and cannot accidentally reuse a pre-close or otherwise invalid partition.
 - Commits new files under `archive/` back to the repo so the point-in-time Parquet history survives
-  the ephemeral cloud runner, retrying the push with a rebase if the branch moved.
-- Uploads that date's partitions to Dropbox.
-- Verifies coverage last, with `--fail-under`. Verification runs *after* the commit on purpose: a
-  degraded Yahoo day is still worth archiving, and a red build should not cost a day of history.
-- Supports manual runs with optional `force=true`, comma-separated `symbols` for smoke tests, and
-  a `run_date` override for backfills.
-
-`.github/workflows/ci.yml` runs `ruff` and `pytest` on every push and pull request, ignoring changes
-under `archive/`.
+  the ephemeral cloud runner when `fresh=false`, retrying the push with a rebase if the branch moved.
+- Verifies analyst coverage, market-context provenance, schema, hashes and post-close PIT timestamps
+  before sealing a recovery bundle.
+- Publishes an immutable Dropbox generation and writes `_READY.json` last. A degraded or partial
+  run may still be preserved in Git for diagnosis, but it can never become a recovery source.
+- Supports comma-separated `symbols` for smoke tests. Symbol-scoped runs never publish recovery
+  bundles.
 
 The workflow uses the built-in `GITHUB_TOKEN`; no Yahoo API key or cloud secret is required.
 
@@ -313,9 +314,11 @@ grows with them and never shrinks. The storage approach is intentionally simple 
 but plan to move `archive/` to object storage such as Cloudflare R2, Backblaze B2, or S3-compatible
 storage as the repository approaches a couple of gigabytes, keeping this workflow as the scheduler.
 
-## Dropbox Backup
+## Dropbox Recovery Bundles
 
-The GitHub Actions workflow can also upload `archive/` to Dropbox after committing.
+The GitHub Actions workflow publishes only a fully sealed completed-session generation to Dropbox.
+Missing Dropbox credentials, an empty inventory, a hash mismatch or an upload conflict fails the
+workflow; none of those cases writes `_READY.json`.
 
 Create a Dropbox app in the Dropbox App Console:
 
@@ -347,37 +350,56 @@ python -m analyst_snapshot dropbox-exchange-code --code CODE_FROM_DROPBOX
 
 Store the printed refresh token as the `DROPBOX_REFRESH_TOKEN` GitHub secret.
 
-To test upload locally:
+Seal and test a recovery upload locally:
 
 ```bash
 export DROPBOX_REFRESH_TOKEN=your_refresh_token
-python -m analyst_snapshot upload-dropbox --run-date 2026-08-18
+python -m analyst_snapshot seal-recovery-bundle --run-date 2026-08-18 \
+  --generation-id manual_20260818_1
+python -m analyst_snapshot upload-recovery-bundle --run-date 2026-08-18
 ```
 
-Without `--run-date` the whole archive is re-uploaded, which gets slower every day; the scheduled
-job always passes the date it just wrote.
-
-By default, Dropbox files are uploaded under:
+The publish layout is immutable and generation-addressed:
 
 ```text
-/DailyStockSnapshots/date=YYYY-MM-DD/<dataset>/data.parquet
+/DailyStockSnapshots/date=YYYY-MM-DD/
+  _READY.json
+  generations/<generation_id>/
+    manifest.json
+    <archive-relative inventoried files>
 ```
 
-For example:
+`manifest.json` uses schema `swinglab_recovery_bundle_v1`. Every file entry records the
+archive-relative path, kind, byte length and SHA-256. Parquet entries additionally bind dataset,
+row count, Arrow schema hash, PIT column and minimum/maximum UTC availability time. The manifest's
+`manifest_identity_sha256` hashes canonical JSON excluding only that self-hash field.
+
+The date-root `_READY.json` uses schema `swinglab_recovery_ready_v1` and points to exactly one
+generation manifest. Its `ready_identity_sha256` likewise hashes canonical JSON excluding only
+itself. Consumers must validate the directory date, READY, manifest self-hash, every file hash,
+schema and PIT timestamp; seeing a directory or manifest alone never means the bundle is complete.
+
+Publication order is:
 
 ```text
-/DailyStockSnapshots/date=2026-07-04/recommendations/data.parquet
-/DailyStockSnapshots/date=2026-07-04/analyst_price_targets/data.parquet
+immutable data files -> immutable generation manifest -> date-root _READY.json
 ```
 
-Newly first-seen rating events are uploaded as date-partitioned point-in-time files:
+Historical Yahoo PIT data cannot be recreated after the fact. A manual historical session may
+package and re-upload contemporaneously archived bytes, but must not fetch today's Yahoo values and
+label them as an old session. If those original bytes are absent, recovery fails closed.
+
+The legacy `upload-dropbox` command remains available for unsealed backup maintenance, but the
+scheduled workflow does not use it and SwingLab must not treat its output as recovery-ready.
+
+To create today's fresh post-close test generation in GitHub Actions, dispatch `Daily analyst
+snapshot` with:
 
 ```text
-/DailyStockSnapshots/date=YYYY-MM-DD/rating_events/data.parquet
+run_date=<today's completed XNYS session>
+fresh=true
+symbols=<empty>
 ```
-
-The cumulative `archive/_index/rating_events.parquet` file is a derived dedupe index. Dropbox
-upload skips non-date files so `DailyStockSnapshots` stays date-first and point-in-time.
 
 For an App Folder Dropbox app, these paths are relative to the app's own Dropbox folder.
 

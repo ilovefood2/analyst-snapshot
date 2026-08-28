@@ -10,11 +10,13 @@ from analyst_snapshot.dropbox_sync import (
     authorization_url,
     exchange_authorization_code,
     load_dropbox_secrets,
+    publish_recovery_bundle,
     upload_directory,
 )
 from analyst_snapshot.logging_utils import JsonlLogger
 from analyst_snapshot.market_context import run_market_context, verify_market_context
 from analyst_snapshot.reader import archive_summary
+from analyst_snapshot.recovery_bundle import finalize_recovery_bundle
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
 from analyst_snapshot.storage import compact_rating_events, rebuild_rating_events_index
 from analyst_snapshot.trading_calendar import DEFAULT_OFFSET_DAYS, print_should_run_report
@@ -122,8 +124,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Upload only this partition date. Without it the whole archive is re-uploaded.",
     )
 
+    publish_recovery_parser = subparsers.add_parser(
+        "upload-recovery-bundle",
+        help="Publish one sealed recovery generation to Dropbox, with READY written last.",
+    )
+    publish_recovery_parser.add_argument("--local-dir", default=None)
+    publish_recovery_parser.add_argument("--remote-root", default=None)
+    publish_recovery_parser.add_argument("--run-date", required=True)
+
+    seal_parser = subparsers.add_parser(
+        "seal-recovery-bundle",
+        help="Strictly validate and seal one completed-session recovery bundle.",
+    )
+    seal_parser.add_argument("--run-date", required=True)
+    seal_parser.add_argument("--generation-id")
+    seal_parser.add_argument("--min-coverage", type=float, default=0.95)
+    seal_parser.add_argument("--repository")
+    seal_parser.add_argument("--git-ref")
+    seal_parser.add_argument("--git-sha")
+    seal_parser.add_argument("--workflow-run-id")
+    seal_parser.add_argument("--workflow-run-attempt")
+    seal_parser.add_argument("--json-out")
+
     should_run_parser = subparsers.add_parser("should-run")
     should_run_parser.add_argument("--as-of-date", help="New York calendar date, YYYY-MM-DD.")
+    should_run_parser.add_argument(
+        "--session-date",
+        help="Explicit XNYS session to validate as completed; cannot be forced pre-close.",
+    )
+    should_run_parser.add_argument(
+        "--now-utc",
+        help="Testing/diagnostic ISO-8601 clock override. Must include a timezone.",
+    )
     should_run_parser.add_argument(
         "--github-output",
         help="Path from GitHub Actions GITHUB_OUTPUT.",
@@ -142,7 +174,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "should-run":
-        print_should_run_report(args.as_of_date, args.github_output, args.force, args.offset_days)
+        print_should_run_report(
+            args.as_of_date,
+            args.github_output,
+            args.force,
+            args.offset_days,
+            session_date_raw=args.session_date,
+            now_utc_raw=args.now_utc,
+        )
         return 0
 
     config = load_config()
@@ -205,6 +244,46 @@ def main(argv: list[str] | None = None) -> int:
             run_date=args.run_date,
         )
         print(f"dropbox_uploaded_files={count}")
+        return 0
+
+    if args.command == "upload-recovery-bundle":
+        local_dir = Path(args.local_dir) if args.local_dir else config.snapshot_dir
+        remote_root = args.remote_root or config.dropbox_remote_root
+        count = publish_recovery_bundle(
+            local_dir,
+            remote_root,
+            load_dropbox_secrets(),
+            run_date=args.run_date,
+        )
+        print(f"dropbox_recovery_uploaded_files={count}")
+        return 0
+
+    if args.command == "seal-recovery-bundle":
+        producer = {
+            key: value
+            for key, value in {
+                "repository": args.repository,
+                "git_ref": args.git_ref,
+                "git_sha": args.git_sha,
+                "workflow_run_id": args.workflow_run_id,
+                "workflow_run_attempt": args.workflow_run_attempt,
+            }.items()
+            if value
+        }
+        manifest = finalize_recovery_bundle(
+            config.snapshot_dir,
+            config.universe_file,
+            session_date=args.run_date,
+            min_coverage=args.min_coverage,
+            generation_id=args.generation_id,
+            producer_identity=producer,
+        )
+        rendered = json.dumps(manifest, indent=2, sort_keys=True)
+        print(rendered)
+        if args.json_out:
+            output = Path(args.json_out)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(rendered + "\n", encoding="utf-8")
         return 0
 
     if args.command == "repair-events":
