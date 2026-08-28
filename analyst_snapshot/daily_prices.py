@@ -77,11 +77,13 @@ def run_daily_prices(
     progress: Callable[[dict[str, Any]], None] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Capture one exact 30-XNYS-session Yahoo tail for the Daily recovery seam.
+    """Capture authentic Yahoo rows from a 30-XNYS-session recovery window.
 
     Network work is deliberately serial.  Each batch is atomically checkpointed before the final
     canonical Parquet is assembled, so a rerun with ``resume=True`` never repeats a hash-valid
-    completed batch.  ``fetcher`` is injectable for an entirely offline contract test.
+    completed batch.  Ordinary symbols need an exact target-session row; the fixed Trend anchors
+    retain the stricter complete-window contract.  ``fetcher`` is injectable for an entirely
+    offline contract test.
     """
 
     root = Path(snapshot_dir)
@@ -353,7 +355,9 @@ def run_daily_prices(
             )
             sleep_fn(retry_cooldown_seconds)
         # A multi-ticker Yahoo response can succeed while silently omitting one ticker or one bar.
-        # Retry only those incomplete 30-session tails, one symbol at a time and never concurrently.
+        # Retry incomplete windows one symbol at a time to retain as much authentic history as
+        # Yahoo exposes.  Missing history is not fabricated and does not disqualify an ordinary
+        # symbol when its exact target row exists.
         retried_symbols = 0
         for canonical, provider_symbol in zip(canonical_batch, provider_batch, strict=True):
             if observed_axes[canonical] == expected_axis:
@@ -397,7 +401,12 @@ def run_daily_prices(
                 rows = [row for row in rows if row["canonical_symbol"] != canonical]
                 rows.extend(merged[session] for session in sorted(merged))
                 observed_axes[canonical] = set(merged)
-            if retry_error is not None:
+            if retry_error is not None and not _price_symbol_is_eligible(
+                canonical,
+                observed_axes[canonical],
+                target_session=target,
+                expected_axis=expected_axis,
+            ):
                 failures.append(
                     {
                         "symbol": canonical,
@@ -406,18 +415,25 @@ def run_daily_prices(
                         "attempts": 2,
                     }
                 )
-        complete_symbols = {
-            canonical for canonical, axis in observed_axes.items() if axis == expected_axis
+        eligible_symbols = {
+            canonical
+            for canonical, axis in observed_axes.items()
+            if _price_symbol_is_eligible(
+                canonical,
+                axis,
+                target_session=target,
+                expected_axis=expected_axis,
+            )
         }
-        # A published price symbol is always one complete 30-session matrix. Partial tails remain
-        # explicit failures for regular-provider fallback; they must not enter a READY generation.
-        rows = [row for row in rows if row["canonical_symbol"] in complete_symbols]
+        # Ordinary symbols publish every authentic row in the capture window when the exact target
+        # row exists.  Trend anchors remain complete 30-session matrices.  Rows for ineligible
+        # symbols are omitted so the manifest failure inventory remains unambiguous.
+        rows = [row for row in rows if row["canonical_symbol"] in eligible_symbols]
         rows.sort(key=lambda row: (str(row["canonical_symbol"]), row["bar_session"]))
         frame = pd.DataFrame(rows, columns=list(DAILY_PRICE_SCHEMA))
         write_parquet(parquet_path, frame, DAILY_PRICES_DATASET)
-        target_symbols = complete_symbols
-        succeeded = sorted(target_symbols)
-        missing = [symbol for symbol in canonical_batch if symbol not in target_symbols]
+        succeeded = sorted(eligible_symbols)
+        missing = [symbol for symbol in canonical_batch if symbol not in eligible_symbols]
         batch_report = {
             "schema": DAILY_PRICE_CHECKPOINT_SCHEMA,
             "status": "complete",
@@ -482,11 +498,17 @@ def run_daily_prices(
     for symbol in coverage["failed_symbols"]:
         if symbol in already_failed:
             continue
+        if symbol in TREND_PRICE_ANCHORS:
+            error_type = "IncompleteTrendAnchorTail"
+            error_message = "Trend anchor requires an exact target and complete 30-session tail"
+        else:
+            error_type = "MissingTargetPriceRow"
+            error_message = "exact target-session price row is missing"
         failures.append(
             {
                 "symbol": symbol,
-                "error_type": "IncompletePriceTail",
-                "error_message": "exact target or 30-session tail is incomplete",
+                "error_type": error_type,
+                "error_message": error_message,
                 "attempts": 2,
             }
         )
@@ -901,7 +923,7 @@ def verify_daily_prices(
     report["coverage"] = coverage
     if coverage["ratio"] < min_coverage:
         errors.append(
-            f"daily-price usable-tail coverage {coverage['ratio']:.6f} is below {min_coverage:.6f}"
+            f"daily-price target-row coverage {coverage['ratio']:.6f} is below {min_coverage:.6f}"
         )
     if coverage["anchor_exact_target_symbols"] != coverage["anchor_expected_symbols"]:
         errors.append("Trend anchors do not all have an exact target row")
@@ -1253,16 +1275,17 @@ def _coverage_report(
         for symbol in requested_symbols
         if target in by_symbol.get(symbol, set()) and symbol not in invalid_symbols
     }
-    usable = {
+    usable_tail = {
         symbol
         for symbol in requested_symbols
         if by_symbol.get(symbol, set()) == session_set and symbol not in invalid_symbols
     }
     anchors = set(TREND_PRICE_ANCHORS)
+    eligible = (target_present - anchors) | (usable_tail & anchors)
     universe = set(base_symbols)
     requested_count = len(requested_symbols)
     observed_universe = observed & universe
-    usable_universe = usable & universe
+    eligible_universe = eligible & universe
     duplicate_pairs = 0
     target_rows = 0
     history_rows = 0
@@ -1272,20 +1295,20 @@ def _coverage_report(
             _coerce_date(value) == target for value in frame["bar_session"] if not pd.isna(value)
         )
         history_rows = len(frame) - target_rows
-    failed = sorted(expected - usable)
+    failed = sorted(expected - eligible)
     session_axis_sha256 = _json_sha256([item.isoformat() for item in sessions])
     return {
         "expected_symbols": len(universe),
         "observed_symbols": len(observed_universe),
-        "matched_symbols": len(usable_universe),
-        "ratio": len(usable_universe) / len(universe) if universe else 0.0,
+        "matched_symbols": len(eligible_universe),
+        "ratio": len(eligible_universe) / len(universe) if universe else 0.0,
         "universe_expected_symbols": len(universe),
         "requested_symbols": requested_count,
         "exact_target_symbols": len(target_present),
-        "usable_tail_symbols": len(usable),
+        "usable_tail_symbols": len(usable_tail),
         "anchor_expected_symbols": len(anchors),
         "anchor_exact_target_symbols": len(target_present & anchors),
-        "anchor_usable_tail_symbols": len(usable & anchors),
+        "anchor_usable_tail_symbols": len(usable_tail & anchors),
         "anchor_ratio": len(target_present & anchors) / len(anchors) if anchors else 0.0,
         "target_rows": target_rows,
         "history_rows": history_rows,
@@ -1297,6 +1320,18 @@ def _coverage_report(
         "lookback_sessions": len(sessions),
         "session_axis_sha256": session_axis_sha256,
     }
+
+
+def _price_symbol_is_eligible(
+    symbol: str,
+    observed_axis: set[date],
+    *,
+    target_session: date,
+    expected_axis: set[date],
+) -> bool:
+    if symbol in TREND_PRICE_ANCHORS:
+        return observed_axis == expected_axis
+    return target_session in observed_axis
 
 
 def _verify_manifest_times(
@@ -1364,14 +1399,37 @@ def _read_valid_checkpoint(
         if set(frame["canonical_symbol"].dropna().astype(str)) - set(expected_symbols):
             return None
     expected_axis = set(expected_sessions)
+    observed_axes: dict[str, set[date]] = {}
     for symbol in expected_symbols:
-        observed_axis = {
+        observed_axes[symbol] = {
             _coerce_date(value)
             for value in frame.loc[frame["canonical_symbol"] == symbol, "bar_session"]
             if not pd.isna(value)
         }
-        if observed_axis != expected_axis:
-            return None
+    eligible_symbols = {
+        symbol
+        for symbol, observed_axis in observed_axes.items()
+        if _price_symbol_is_eligible(
+            symbol,
+            observed_axis,
+            target_session=target_session,
+            expected_axis=expected_axis,
+        )
+    }
+    # Preserve the existing recovery behavior: a checkpoint with any genuinely missing target
+    # input is deliberately refetched on resume.  A short-history ordinary symbol is not missing
+    # and therefore does not invalidate an otherwise complete checkpoint.
+    if eligible_symbols != set(expected_symbols):
+        return None
+    succeeded = metadata.get("succeeded_symbols")
+    missing = metadata.get("missing_symbols")
+    if succeeded != sorted(eligible_symbols):
+        return None
+    if missing != [symbol for symbol in expected_symbols if symbol not in eligible_symbols]:
+        return None
+    observed_symbols = set(frame["canonical_symbol"].dropna().astype(str))
+    if observed_symbols != eligible_symbols:
+        return None
     try:
         checkpoint_started = _parse_utc(
             metadata.get("capture_started_utc"), "checkpoint capture_started_utc"

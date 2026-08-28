@@ -319,9 +319,13 @@ What it does:
   The broad `daily_prices`, its price manifest and transient checkpoints are explicitly Git-ignored;
   their durable sealed copy is the immutable Dropbox v2 generation, so a killed runner re-fetches
   prices instead of growing Git by hundreds of thousands of rows per session.
-- Captures Yahoo raw and adjusted OHLCV for the exact latest 30 XNYS sessions in serial 50-symbol
-  batches, covering `universe.txt` plus the 14 fixed Trend anchors.
-- Verifies price exact-target/tail coverage, adjustment parity, schema, hashes and post-close PIT;
+- Requests Yahoo raw and adjusted OHLCV over the latest 30 XNYS sessions in serial 50-symbol
+  batches, covering `universe.txt` plus the 14 fixed Trend anchors. Ordinary symbols publish every
+  authentic row returned when the exact target-session row exists; newly listed or discontinuous
+  symbols are not rejected merely because Yahoo exposes fewer than 30 sessions. The 14 fixed Trend
+  anchors retain the complete 30-session requirement.
+- Verifies ordinary-symbol exact-target coverage, Trend-anchor tail coverage, adjustment parity,
+  schema, hashes and post-close PIT;
   then immediately publishes an immutable price generation and writes `_PRICE_READY.json` last,
   before the multi-hour analyst loop begins.
 - Continues with analyst and market-context collection for normal/scheduled runs, then publishes the

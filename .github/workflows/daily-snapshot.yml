@@ -143,8 +143,9 @@ jobs:
           exit 1
 
       # Prices run before the multi-hour analyst loop. The collector uses one network lane
-      # (threads=false), immutable batch checkpoints, and an exact 30-XNYS-session axis so a
-      # retry can resume without parallel Yahoo fan-out.
+      # (threads=false), immutable batch checkpoints, and a 30-XNYS-session capture window so a
+      # retry can resume without parallel Yahoo fan-out. Ordinary symbols require the exact target
+      # row; fixed Trend anchors retain the complete-window requirement.
       - name: Capture Daily price recovery tail
         id: capture_daily_prices
         if: steps.calendar.outputs.run == 'true' && !inputs.symbols

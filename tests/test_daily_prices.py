@@ -75,9 +75,11 @@ class FakeDailyDownload:
         *,
         omit_first_target: str | None = None,
         always_missing: set[str] | None = None,
+        missing_history_prefix: dict[str, int] | None = None,
     ):
         self.omit_first_target = omit_first_target
         self.always_missing = always_missing or set()
+        self.missing_history_prefix = missing_history_prefix or {}
         self.calls: list[tuple[list[str], dict[str, Any]]] = []
         self.sessions = _price_sessions(datetime.fromisoformat(TARGET).date())
 
@@ -113,7 +115,11 @@ class FakeDailyDownload:
             for field in fields:
                 field_values: list[float] = []
                 for session_number, _session in enumerate(self.sessions):
-                    if missing_all or (omit_target and session_number == len(self.sessions) - 1):
+                    if (
+                        missing_all
+                        or session_number < self.missing_history_prefix.get(symbol, 0)
+                        or (omit_target and session_number == len(self.sessions) - 1)
+                    ):
                         field_values.append(float("nan"))
                         continue
                     base = 100.0 + symbol_number + session_number
@@ -470,12 +476,87 @@ def test_missing_non_anchor_within_threshold_keeps_complete_manifest(tmp_path: P
     assert manifest["failures"] == [
         {
             "attempts": 2,
-            "error_message": "exact target or 30-session tail is incomplete",
-            "error_type": "IncompletePriceTail",
+            "error_message": "exact target-session price row is missing",
+            "error_type": "MissingTargetPriceRow",
             "symbol": "TEST00",
         }
     ]
     assert verified["ok"] is True, verified["errors"]
+
+
+def test_partial_history_non_anchor_publishes_authentic_target_rows_and_resumes(
+    tmp_path: Path,
+) -> None:
+    universe = _universe(tmp_path, ["AAPL"])
+    fetcher = FakeDailyDownload(missing_history_prefix={"AAPL": 28})
+
+    summary = _run(tmp_path, universe, fetcher)
+    output = dataset_path(tmp_path / "archive", DAILY_PRICES_DATASET, TARGET)
+    frame = pq.ParquetFile(output).read().to_pandas()
+    aapl = frame.loc[frame["symbol"] == "AAPL"]
+    manifest = json.loads(
+        daily_price_manifest_path(tmp_path / "archive", TARGET).read_text(encoding="utf-8")
+    )
+    verified = verify_daily_prices(tmp_path / "archive", universe, TARGET, now_utc=AFTER_CLOSE)
+
+    assert summary["ok"] is True
+    assert len(fetcher.calls) == 2
+    assert fetcher.calls[1][0] == ["AAPL"]
+    assert len(aapl) == 2
+    assert aapl["bar_session"].max().isoformat() == TARGET
+    assert manifest["failures"] == []
+    assert manifest["coverage"]["ratio"] == 1.0
+    assert manifest["coverage"]["failed_symbols"] == []
+    assert manifest["coverage"]["usable_tail_symbols"] == len(TREND_PRICE_ANCHORS)
+    assert verified["ok"] is True, verified["errors"]
+
+    class NoNetwork:
+        def __call__(self, *_args: Any, **_kwargs: Any) -> pd.DataFrame:
+            raise AssertionError("partial-history resume unexpectedly contacted Yahoo")
+
+    resumed = run_daily_prices(
+        tmp_path / "archive",
+        universe,
+        TARGET,
+        resume=True,
+        batch_size=50,
+        fetcher=NoNetwork(),
+        clock=lambda: AFTER_CLOSE,
+        progress=lambda _payload: None,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert resumed["ok"] is True
+    assert resumed["resumed_batches"] == 1
+
+
+def test_partial_history_trend_anchor_still_requires_complete_window(tmp_path: Path) -> None:
+    universe = _universe(tmp_path, ["AAPL"])
+    summary = _run(
+        tmp_path,
+        universe,
+        FakeDailyDownload(missing_history_prefix={"QQQ": 1}),
+    )
+    manifest = json.loads(
+        daily_price_manifest_path(tmp_path / "archive", TARGET).read_text(encoding="utf-8")
+    )
+    output = dataset_path(tmp_path / "archive", DAILY_PRICES_DATASET, TARGET)
+    frame = pq.ParquetFile(output).read().to_pandas()
+    verified = verify_daily_prices(tmp_path / "archive", universe, TARGET, now_utc=AFTER_CLOSE)
+
+    assert summary["ok"] is True
+    assert "QQQ" not in set(frame["symbol"])
+    assert manifest["coverage"]["failed_symbols"] == ["QQQ"]
+    assert manifest["failures"] == [
+        {
+            "attempts": 2,
+            "error_message": "Trend anchor requires an exact target and complete 30-session tail",
+            "error_type": "IncompleteTrendAnchorTail",
+            "symbol": "QQQ",
+        }
+    ]
+    assert verified["ok"] is False
+    assert any("Trend anchors" in error for error in verified["errors"])
 
 
 def test_verify_rejects_adjusted_price_tampering(tmp_path: Path) -> None:

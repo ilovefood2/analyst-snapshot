@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     daily_prices_parser = subparsers.add_parser(
         "daily-prices",
-        help="Capture a sealed-input Yahoo raw+adjusted 30-session Daily price tail.",
+        help="Capture sealed-input Yahoo raw+adjusted prices from a 30-session window.",
     )
     daily_prices_parser.add_argument("--run-date", required=True)
     daily_prices_parser.add_argument("--resume", action="store_true")

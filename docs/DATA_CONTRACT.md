@@ -79,8 +79,11 @@ FINRA/OCC activity file; it is **not** when that file became observable. A row m
 `source_date < trading_date`, while `snapshot_utc` records the honest collection time. Never
 backdate availability to `source_date`.
 
-The `daily_prices` partition stores the exact 30-XNYS-session Yahoo observation visible when that
-bundle was captured. Its historical bar key is `bar_session`, not `date`, so it cannot collide with
+The `daily_prices` partition stores the authentic Yahoo observation visible from a 30-XNYS-session
+capture window when that bundle was produced. An ordinary symbol is eligible when its exact target
+row exists, and every authentic row Yahoo returned in that window is retained; pre-listing or
+otherwise unavailable sessions are never fabricated. The fixed Trend anchors separately require a
+complete 30-session window. The historical bar key is `bar_session`, not `date`, so it cannot collide with
 the Hive `date=YYYY-MM-DD` bundle partition. `available_at_utc` is the response-completion time and
 is the PIT authority; neither `bar_session` nor the session close is an availability timestamp.
 Each row carries both unadjusted OHLC and the fully adjusted OHLC derived from the same Yahoo
@@ -92,7 +95,8 @@ raw high or low equals close; raw OHLC validity and tight factor parity remain i
 
 The requested price inventory is `universe.txt` plus the exact Trend anchors
 `QQQ, SPY, IWM, HYG, LQD, TLT, IEF, RSP, SOXX, XLK, XLP, XLU, VIXY, VXZ`. A recovery seal requires
-100% exact-target anchor coverage and the configured universe target/tail coverage. yfinance does
+100% exact-target and complete-tail anchor coverage plus the configured universe's exact-target
+coverage. yfinance does
 not expose stable HTTP response bytes, so `raw_record_sha256` hashes the canonical normalized raw
 bar record; manifests explicitly record `raw_provider_bytes_claimed=false` and the provider's
 unknown caching, training and redistribution license posture.

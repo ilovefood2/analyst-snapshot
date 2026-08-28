@@ -380,7 +380,7 @@ def _validate_price_recovery_manifest(
         raise ValueError("Price-recovery coverage must be an object")
     ratio = coverage.get("ratio")
     if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or ratio < 0.95:
-        raise ValueError("Price-recovery usable-tail coverage is below 0.95")
+        raise ValueError("Price-recovery exact-target coverage is below 0.95")
     if coverage.get("anchor_exact_target_symbols") != coverage.get(
         "anchor_expected_symbols"
     ) or coverage.get("anchor_usable_tail_symbols") != coverage.get("anchor_expected_symbols"):
