@@ -19,10 +19,12 @@ archive/
   cftc_tff_positioning/date=YYYY-MM-DD/data.parquet
   finra_short_volume/date=YYYY-MM-DD/data.parquet
   occ_account_volume/date=YYYY-MM-DD/data.parquet
+  daily_prices/date=YYYY-MM-DD/data.parquet
   _index/rating_events.parquet
   _manifests/date=YYYY-MM-DD/run_<timestamp>.json
   _market_context_manifests/date=YYYY-MM-DD/manifest.json
   _market_context_sources/date=YYYY-MM-DD/*
+  _daily_price_manifests/date=YYYY-MM-DD/manifest.json
   _recovery_manifests/date=YYYY-MM-DD/manifest.json
 ```
 
@@ -39,9 +41,10 @@ default (`ignore_prefixes=[".", "_"]`), which is why the cumulative index and th
 live there. Never put a non-partitioned file directly under `archive/<dataset>/`: it gets scanned
 as if it were a partition, and every row it holds is counted twice.
 
-`_recovery_manifests` contains the local `swinglab_recovery_bundle_v1` seal. It is valid only when
+`_recovery_manifests` contains the local `swinglab_recovery_bundle_v2` seal. It is valid only when
 the XNYS session has closed, every inventoried PIT timestamp is post-close, coverage and
-market-context checks pass, and every byte, SHA-256, row count and Arrow schema hash verifies.
+market-context and Daily-price checks pass, and every byte, SHA-256, row count and Arrow schema
+hash verifies. Version 1 bundles predate `daily_prices` and are not price-capable recovery inputs.
 
 ## The two timestamps, and the lookahead rule
 
@@ -55,7 +58,8 @@ They are not the same instant, and the gap has changed over the life of the arch
 | Partitions | Captured at | Gap after that day's close |
 | --- | --- | --- |
 | `2026-07-06` … `2026-08-18` | ~12:40 UTC the **next** morning | ~20 hours |
-| later partitions | ~02:00 UTC, i.e. 22:00 ET the **same** day | ~6 hours |
+| later partitions before the 18:30 ET schedule | ~02:00 UTC, i.e. 22:00/21:00 ET | ~5–6 hours |
+| partitions produced by the 18:30 ET schedule | 22:30 UTC (EDT) or 23:30 UTC (EST) | ~2.5 hours |
 
 **Rule: filter on `snapshot_utc`, never on the partition date.** Treating `date=D` as "known at
 D's close" leaks future information — for the early partitions, it leaks an entire overnight
@@ -65,6 +69,26 @@ The rule is equally strict for market context. `source_date` is the date inside 
 FINRA/OCC activity file; it is **not** when that file became observable. A row may therefore have
 `source_date < trading_date`, while `snapshot_utc` records the honest collection time. Never
 backdate availability to `source_date`.
+
+The `daily_prices` partition stores the exact 30-XNYS-session Yahoo observation visible when that
+bundle was captured. Its historical bar key is `bar_session`, not `date`, so it cannot collide with
+the Hive `date=YYYY-MM-DD` bundle partition. `available_at_utc` is the response-completion time and
+is the PIT authority; neither `bar_session` nor the session close is an availability timestamp.
+Each row carries both unadjusted OHLC and the fully adjusted OHLC derived from the same Yahoo
+response (`factor = Adj Close / Close`), plus dividend and split evidence. Dropbox is transport;
+`provider_name` remains `yahoo` and must never be relabelled as Futu, IBKR or FMP.
+
+The requested price inventory is `universe.txt` plus the exact Trend anchors
+`QQQ, SPY, IWM, HYG, LQD, TLT, IEF, RSP, SOXX, XLK, XLP, XLU, VIXY, VXZ`. A recovery seal requires
+100% exact-target anchor coverage and the configured universe target/tail coverage. yfinance does
+not expose stable HTTP response bytes, so `raw_record_sha256` hashes the canonical normalized raw
+bar record; manifests explicitly record `raw_provider_bytes_claimed=false` and the provider's
+unknown caching, training and redistribution license posture.
+The provider block also binds conservative capability facts: Yahoo supplies adjusted/unadjusted
+prices, actions and symbol history for the supplied current universe, but has no PIT-universe,
+historical-constituent, delisted-security, delisting-return or permanent-ID authority; the capture
+is survivor-only and is not presently promotion-eligible. Those are evidence for later policy
+gates, not a hard-coded decision that normal recovery rows can never be trained or promoted.
 
 `analyst_snapshot.reader` enforces this with an `as_of` argument:
 

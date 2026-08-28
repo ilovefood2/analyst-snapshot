@@ -2,10 +2,10 @@ name: Daily analyst snapshot
 
 on:
   schedule:
-    # 02:00 UTC is 22:00 in New York during EDT and 21:00 during EST. GitHub Actions cron is UTC
-    # only, so one of the two halves of the year is an hour off; both are hours after the close.
-    # The New York calendar date is resolved in code, so the partition date is correct either way.
-    - cron: "0 2 * * *"
+    # GitHub cron is UTC. These are the EDT and EST representations of 18:30 New York time.
+    # Both fire on weekdays; schedule-gate authorizes exactly one lane and rejects market holidays.
+    - cron: "30 22 * * 1-5"
+    - cron: "30 23 * * 1-5"
   workflow_dispatch:
     inputs:
       force:
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     # GitHub caps a job at 360 minutes. The run step gets a shorter budget of its own so that a
     # timeout still leaves time for the commit step to preserve whatever was fetched.
-    timeout-minutes: 350
+    timeout-minutes: 355
     env:
       SNAPSHOT_DIR: ./archive
       UNIVERSE_FILE: ./universe.txt
@@ -55,6 +55,8 @@ jobs:
       # Fail the build when any dataset covers less than this share of the universe. The data is
       # committed before this gate runs, so a red build never costs a day of history.
       MIN_COVERAGE: "0.95"
+      MIN_PRICE_COVERAGE: "0.95"
+      PRICE_BATCH_SIZE: "50"
       # Free official prospective context only. Cboe Open-Close is intentionally excluded because
       # it is a paid proprietary product; OCC provides account-type volume without buy/sell or
       # open/close, CFTC provides weekly trader categories, and FINRA provides short-sale volume.
@@ -73,14 +75,30 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Authorize 18:30 America/New_York schedule
+        id: schedule_gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule || '' }}
+        run: |
+          python -m analyst_snapshot schedule-gate \
+            --event-name "$EVENT_NAME" \
+            --event-schedule "$EVENT_SCHEDULE" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Resolve latest completed XNYS session
         id: calendar
+        if: steps.schedule_gate.outputs.run == 'true'
         env:
           OVERRIDE: ${{ inputs.run_date || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          GATED_DATE: ${{ steps.schedule_gate.outputs.new_york_date }}
         run: |
           session_arg=""
           if [ -n "$OVERRIDE" ]; then
             session_arg="--session-date $OVERRIDE"
+          elif [ "$EVENT_NAME" = "schedule" ]; then
+            session_arg="--session-date $GATED_DATE"
           fi
           python -m analyst_snapshot should-run \
             --github-output "$GITHUB_OUTPUT" $session_arg
@@ -111,6 +129,36 @@ jobs:
           echo "::error::Requested run_date is not a completed XNYS session."
           exit 1
 
+      # Prices run before the multi-hour analyst loop. The collector uses one network lane
+      # (threads=false), immutable batch checkpoints, and an exact 30-XNYS-session axis so a
+      # retry can resume without parallel Yahoo fan-out.
+      - name: Capture Daily price recovery tail
+        id: capture_daily_prices
+        if: steps.calendar.outputs.run == 'true' && !inputs.symbols
+        timeout-minutes: 180
+        continue-on-error: true
+        env:
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+          RESUME_ARG: ${{ steps.workspace.outputs.resume_arg }}
+        run: |
+          python -m analyst_snapshot daily-prices $RESUME_ARG \
+            --run-date "$RUN_DATE" \
+            --batch-size "$PRICE_BATCH_SIZE"
+
+      - name: Verify Daily price recovery tail
+        id: verify_daily_prices
+        if: always() && steps.calendar.outputs.run == 'true' && !inputs.symbols
+        continue-on-error: true
+        env:
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+        run: |
+          python -m analyst_snapshot verify-daily-prices \
+            --run-date "$RUN_DATE" \
+            --fail-under "$MIN_PRICE_COVERAGE" \
+            --json-out "verify-daily-prices-$RUN_DATE.json"
+
       # Run this small capture before the multi-hour Yahoo loop so the irreplaceable point-in-time
       # market context survives even when Yahoo consumes the remaining job budget. Any partial
       # capture is committed below and verify-market-context makes the workflow red afterward.
@@ -129,7 +177,10 @@ jobs:
 
       - name: Run analyst snapshot
         if: steps.calendar.outputs.run == 'true'
-        timeout-minutes: 300
+        # Preserve a hard tail for commit, semantic verification, sealing and Dropbox publication
+        # inside the 355-minute job cap. A slow analyst run fails visibly instead of consuming the
+        # cleanup/publication budget and stranding price checkpoints on the ephemeral runner.
+        timeout-minutes: 120
         continue-on-error: true
         env:
           SYMBOLS: ${{ inputs.symbols || '' }}
@@ -209,6 +260,7 @@ jobs:
         if: >-
           steps.calendar.outputs.run == 'true' &&
           !inputs.symbols &&
+          steps.verify_daily_prices.outcome == 'success' &&
           steps.verify_analyst.outcome == 'success' &&
           steps.verify_market_context.outcome == 'success'
         env:
@@ -248,6 +300,7 @@ jobs:
           name: verify-report
           path: |
             verify-*.json
+            verify-daily-prices-*.json
             recovery-bundle-*.json
           if-no-files-found: ignore
           retention-days: 30
@@ -256,12 +309,14 @@ jobs:
         if: always() && steps.calendar.outputs.run == 'true' && !inputs.symbols
         env:
           ANALYST_VERIFY: ${{ steps.verify_analyst.outcome }}
+          PRICE_VERIFY: ${{ steps.verify_daily_prices.outcome }}
           MARKET_VERIFY: ${{ steps.verify_market_context.outcome }}
           SEAL: ${{ steps.seal_recovery.outcome }}
           PUBLISH: ${{ steps.publish_recovery.outcome }}
         run: |
-          if [ "$ANALYST_VERIFY" != "success" ] || [ "$MARKET_VERIFY" != "success" ] || \
+          if [ "$PRICE_VERIFY" != "success" ] || [ "$ANALYST_VERIFY" != "success" ] || \
+             [ "$MARKET_VERIFY" != "success" ] || \
              [ "$SEAL" != "success" ] || [ "$PUBLISH" != "success" ]; then
-            echo "::error::Recovery publication failed: analyst=$ANALYST_VERIFY market=$MARKET_VERIFY seal=$SEAL publish=$PUBLISH"
+            echo "::error::Recovery publication failed: prices=$PRICE_VERIFY analyst=$ANALYST_VERIFY market=$MARKET_VERIFY seal=$SEAL publish=$PUBLISH"
             exit 1
           fi

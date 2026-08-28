@@ -14,14 +14,20 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from analyst_snapshot import __version__
-from analyst_snapshot.datasets import CORE_SCHEMAS, DATASETS, MARKET_CONTEXT_DATASETS
+from analyst_snapshot.daily_prices import daily_price_manifest_path, verify_daily_prices
+from analyst_snapshot.datasets import (
+    CORE_SCHEMAS,
+    DAILY_PRICES_DATASET,
+    DATASETS,
+    MARKET_CONTEXT_DATASETS,
+)
 from analyst_snapshot.market_context import manifest_path as market_context_manifest_path
 from analyst_snapshot.market_context import verify_market_context
 from analyst_snapshot.runner import MANIFEST_DIR_NAME, read_universe
 from analyst_snapshot.storage import dataset_path
 from analyst_snapshot.trading_calendar import session_market_close_utc
 
-RECOVERY_BUNDLE_SCHEMA = "swinglab_recovery_bundle_v1"
+RECOVERY_BUNDLE_SCHEMA = "swinglab_recovery_bundle_v2"
 RECOVERY_MANIFEST_DIR_NAME = "_recovery_manifests"
 RATING_EVENTS_DATASET = "rating_events"
 
@@ -70,8 +76,8 @@ def finalize_recovery_bundle(
             f"session {session_date} has not closed: close={_iso_utc(market_close)} "
             f"now={_iso_utc(observed_now)}"
         )
-    if not 0.0 < min_coverage <= 1.0:
-        raise RecoveryBundleError("min_coverage must be in (0, 1]")
+    if min_coverage != 0.95:
+        raise RecoveryBundleError("recovery v2 min_coverage must be exactly 0.95")
 
     expected_symbols = set(read_universe(universe_file))
     if not expected_symbols:
@@ -79,6 +85,55 @@ def finalize_recovery_bundle(
 
     files: list[dict[str, Any]] = []
     coverage: dict[str, Any] = {}
+
+    price_report = verify_daily_prices(
+        snapshot_dir,
+        universe_file,
+        session_date=session_date,
+        min_coverage=min_coverage,
+        now_utc=observed_now,
+    )
+    if not price_report.get("ok"):
+        raise RecoveryBundleError(
+            "daily-price verification failed: "
+            + "; ".join(str(error) for error in price_report.get("errors", []))
+        )
+    price_evidence, _price_symbols = _validate_parquet(
+        snapshot_dir,
+        dataset_path(snapshot_dir, DAILY_PRICES_DATASET, session_date),
+        dataset=DAILY_PRICES_DATASET,
+        pit_column="available_at_utc",
+        market_close=market_close,
+        sealed_at=observed_now,
+    )
+    verified_price_output = price_report.get("output")
+    if not isinstance(verified_price_output, dict) or any(
+        verified_price_output.get(field) != price_evidence.get(field)
+        for field in ("path", "rows", "bytes", "sha256", "schema_sha256")
+    ):
+        raise RecoveryBundleError("daily-price Parquet changed after strict verification")
+    files.append(price_evidence)
+    coverage[DAILY_PRICES_DATASET] = dict(price_report.get("coverage") or {})
+
+    price_manifest = daily_price_manifest_path(snapshot_dir, session_date)
+    price_manifest_payload = _read_json(price_manifest, role="daily-price manifest")
+    if price_manifest_payload.get("session_date") != session_date:
+        raise RecoveryBundleError("daily-price manifest session date mismatch")
+    if price_manifest_payload.get("status") != "complete":
+        raise RecoveryBundleError("daily-price manifest is not complete")
+    price_manifest_evidence = _file_evidence(
+        snapshot_dir, price_manifest, kind="daily_price_manifest"
+    )
+    verified_price_manifest = price_report.get("manifest")
+    if (
+        not isinstance(verified_price_manifest, dict)
+        or verified_price_manifest.get("sha256") != price_manifest_evidence.get("sha256")
+        or verified_price_manifest.get("identity_sha256")
+        != price_manifest_payload.get("manifest_identity_sha256")
+    ):
+        raise RecoveryBundleError("daily-price manifest changed after strict verification")
+    files.append(price_manifest_evidence)
+
     for spec in DATASETS.values():
         path = dataset_path(snapshot_dir, spec.name, session_date)
         evidence, symbols = _validate_parquet(
@@ -192,6 +247,7 @@ def finalize_recovery_bundle(
         "analyst_snapshot_version": __version__,
         "providers": {
             "analyst": "yahoo_via_yfinance",
+            "daily_prices": dict(price_report.get("provider") or {}),
             "market_context": ["cftc", "finra", "occ"],
         },
         "universe": {

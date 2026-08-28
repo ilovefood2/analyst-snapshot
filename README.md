@@ -213,6 +213,18 @@ the close and archives the session that just ended, so the checked date defaults
 date the job fires on. Pass `--offset-days 1` for a morning-after schedule that archives the
 previous day instead.
 
+The GitHub workflow separately gates its two UTC cron lanes so exactly one represents 18:30 New
+York time. For example, this authorizes the EDT lane on a summer trading day:
+
+```bash
+python -m analyst_snapshot schedule-gate \
+  --event-name schedule \
+  --event-schedule "30 22 * * 1-5"
+```
+
+`workflow_dispatch` bypasses only this cron-lane gate; the completed-session publication checks
+still apply.
+
 ## Verify
 
 Report coverage against the universe, comparison rows from the previous archived date, recent
@@ -289,18 +301,28 @@ Actions.
 
 What it does:
 
-- Runs daily at 02:00 UTC. GitHub Actions cron is UTC only, so that is 22:00 in New York during
-  EDT and 21:00 during EST — several hours after the close either way. The New York calendar date
-  is resolved from the latest NYSE `market_close <= actual_start_time`. This remains correct when
-  GitHub delays a job past New York midnight.
+- Runs on weekdays at 18:30 New York time. GitHub Actions receives two UTC cron events, 22:30 for
+  EDT and 23:30 for EST; a fail-closed gate uses the literal `github.event.schedule` value and the
+  New York UTC offset to authorize exactly one. It does not require the delayed runner's actual
+  start minute to match the cron minute. It resolves the latest weekday occurrence of that literal
+  cron, so a delayed Friday runner still keeps Friday after New York midnight; that occurrence date
+  must itself be an NYSE session, preventing a holiday run from republishing the prior session.
+- After the schedule gate passes, the partition date is resolved from the latest NYSE
+  `market_close <= actual_start_time`. Manual dispatch bypasses the cron gate but never the
+  completed-session publication gate.
 - An explicit manual `run_date` must be a real NYSE session whose exact close has passed. `force`
   never bypasses this publication gate.
 - Scheduled runs remain resumable. Manual dispatch defaults to `fresh=true`, which uses an isolated
   archive and cannot accidentally reuse a pre-close or otherwise invalid partition.
 - Commits new files under `archive/` back to the repo so the point-in-time Parquet history survives
   the ephemeral cloud runner when `fresh=false`, retrying the push with a rebase if the branch moved.
-- Verifies analyst coverage, market-context provenance, schema, hashes and post-close PIT timestamps
-  before sealing a recovery bundle.
+  The broad `daily_prices`, its price manifest and transient checkpoints are explicitly Git-ignored;
+  their durable sealed copy is the immutable Dropbox v2 generation, so a killed runner re-fetches
+  prices instead of growing Git by hundreds of thousands of rows per session.
+- Captures Yahoo raw and adjusted OHLCV for the exact latest 30 XNYS sessions in serial 50-symbol
+  batches, covering `universe.txt` plus the 14 fixed Trend anchors.
+- Verifies price exact-target/tail coverage, adjustment parity, analyst coverage, market-context
+  provenance, schema, hashes and post-close PIT timestamps before sealing a recovery bundle.
 - Publishes an immutable Dropbox generation and writes `_READY.json` last. A degraded or partial
   run may still be preserved in Git for diagnosis, but it can never become a recovery source.
 - Supports comma-separated `symbols` for smoke tests. Symbol-scoped runs never publish recovery
@@ -309,10 +331,10 @@ What it does:
 The workflow uses the built-in `GITHUB_TOKEN`; no Yahoo API key or cloud secret is required.
 
 Because the repo is private, GitHub Actions usage counts against your account's included private
-repo minutes. New partitions are about 3.8 MB per trading day, roughly 1 GB per year, and `.git`
-grows with them and never shrinks. The storage approach is intentionally simple and free to start,
-but plan to move `archive/` to object storage such as Cloudflare R2, Backblaze B2, or S3-compatible
-storage as the repository approaches a couple of gigabytes, keeping this workflow as the scheduler.
+repo minutes. The 30-session broad price tail materially increases each Daily generation, and
+`.git` grows with committed archive bytes and never shrinks. The storage approach is intentionally
+simple to start, but plan to move large immutable payloads to object storage such as Cloudflare R2,
+Backblaze B2, or S3-compatible storage as the archive grows, keeping this workflow as the scheduler.
 
 ## Dropbox Recovery Bundles
 
@@ -354,6 +376,8 @@ Seal and test a recovery upload locally:
 
 ```bash
 export DROPBOX_REFRESH_TOKEN=your_refresh_token
+python -m analyst_snapshot daily-prices --run-date 2026-08-18 --batch-size 50
+python -m analyst_snapshot verify-daily-prices --run-date 2026-08-18 --fail-under 0.95
 python -m analyst_snapshot seal-recovery-bundle --run-date 2026-08-18 \
   --generation-id manual_20260818_1
 python -m analyst_snapshot upload-recovery-bundle --run-date 2026-08-18
@@ -369,15 +393,20 @@ The publish layout is immutable and generation-addressed:
     <archive-relative inventoried files>
 ```
 
-`manifest.json` uses schema `swinglab_recovery_bundle_v1`. Every file entry records the
+`manifest.json` uses schema `swinglab_recovery_bundle_v2`. Version 2 requires the sealed
+`daily_prices` Parquet and its price manifest in addition to the analyst and market-context roles.
+Every file entry records the
 archive-relative path, kind, byte length and SHA-256. Parquet entries additionally bind dataset,
 row count, Arrow schema hash, PIT column and minimum/maximum UTC availability time. The manifest's
 `manifest_identity_sha256` hashes canonical JSON excluding only that self-hash field.
 
-The date-root `_READY.json` uses schema `swinglab_recovery_ready_v1` and points to exactly one
+The date-root `_READY.json` uses schema `swinglab_recovery_ready_v2` and points to exactly one
 generation manifest. Its `ready_identity_sha256` likewise hashes canonical JSON excluding only
 itself. Consumers must validate the directory date, READY, manifest self-hash, every file hash,
 schema and PIT timestamp; seeing a directory or manifest alone never means the bundle is complete.
+
+Version 1 bundles remain historical evidence but contain no price payload. A consumer may stage
+them for diagnosis, but it must not infer price capability from an old READY or bundle schema.
 
 Publication order is:
 
@@ -420,8 +449,8 @@ cp launchd/com.local.analyst-snapshot.plist.template \
 launchctl load ~/Library/LaunchAgents/com.local.analyst-snapshot.plist
 ```
 
-The template runs daily at 22:00 local time, matching the cloud schedule on a Mac set to Eastern
-Time.
+The legacy template runs daily at 22:00 local time. It no longer matches the GitHub cloud schedule,
+which runs on weekdays at 18:30 New York time; do not install both as writers for the same archive.
 
 Check loaded jobs:
 

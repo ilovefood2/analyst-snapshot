@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .DS_Store
 *.egg-info/
+/archive/daily_prices/
+/archive/_daily_price_manifests/
+/archive/_daily_price_checkpoints/

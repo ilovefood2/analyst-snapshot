@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from analyst_snapshot.config import load_config
+from analyst_snapshot.daily_prices import run_daily_prices, verify_daily_prices
 from analyst_snapshot.datasets import parse_dataset_codes
 from analyst_snapshot.dropbox_sync import (
     authorization_url,
@@ -19,7 +20,11 @@ from analyst_snapshot.reader import archive_summary
 from analyst_snapshot.recovery_bundle import finalize_recovery_bundle
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
 from analyst_snapshot.storage import compact_rating_events, rebuild_rating_events_index
-from analyst_snapshot.trading_calendar import DEFAULT_OFFSET_DAYS, print_should_run_report
+from analyst_snapshot.trading_calendar import (
+    DEFAULT_OFFSET_DAYS,
+    print_schedule_gate_report,
+    print_should_run_report,
+)
 from analyst_snapshot.universe import (
     DEFAULT_EXCHANGES,
     DEFAULT_MIN_MARKET_CAP,
@@ -48,6 +53,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Symbols buffered before a partition is rewritten. Lower is safer, slower.",
     )
+
+    daily_prices_parser = subparsers.add_parser(
+        "daily-prices",
+        help="Capture a sealed-input Yahoo raw+adjusted 30-session Daily price tail.",
+    )
+    daily_prices_parser.add_argument("--run-date", required=True)
+    daily_prices_parser.add_argument("--resume", action="store_true")
+    daily_prices_parser.add_argument("--batch-size", type=int, choices=(50,), default=50)
+
+    verify_daily_prices_parser = subparsers.add_parser(
+        "verify-daily-prices",
+        help="Recompute Daily price schema, PIT, session, coverage, and adjustment checks.",
+    )
+    verify_daily_prices_parser.add_argument("--run-date", required=True)
+    verify_daily_prices_parser.add_argument("--fail-under", type=float, default=0.95)
+    verify_daily_prices_parser.add_argument("--json-out")
 
     verify_parser = subparsers.add_parser("verify", help="Report archive coverage as JSON.")
     verify_parser.add_argument(
@@ -138,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     seal_parser.add_argument("--run-date", required=True)
     seal_parser.add_argument("--generation-id")
-    seal_parser.add_argument("--min-coverage", type=float, default=0.95)
+    seal_parser.add_argument("--min-coverage", type=float, choices=(0.95,), default=0.95)
     seal_parser.add_argument("--repository")
     seal_parser.add_argument("--git-ref")
     seal_parser.add_argument("--git-sha")
@@ -167,6 +188,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_OFFSET_DAYS,
         help="Days before --as-of-date to check. 0 for an after-close run, 1 for a morning run.",
     )
+
+    schedule_gate_parser = subparsers.add_parser(
+        "schedule-gate",
+        help="Authorize the active 18:30 America/New_York GitHub cron lane.",
+    )
+    schedule_gate_parser.add_argument("--event-name", required=True)
+    schedule_gate_parser.add_argument("--event-schedule", default="")
+    schedule_gate_parser.add_argument("--github-output")
+    schedule_gate_parser.add_argument(
+        "--now-utc",
+        help="Testing/diagnostic ISO-8601 clock override. Must include a timezone.",
+    )
     return parser
 
 
@@ -184,7 +217,42 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "schedule-gate":
+        print_schedule_gate_report(
+            args.event_name,
+            args.event_schedule,
+            args.github_output,
+            now_utc_raw=args.now_utc,
+        )
+        return 0
+
     config = load_config()
+
+    if args.command == "daily-prices":
+        result = run_daily_prices(
+            config.snapshot_dir,
+            config.universe_file,
+            session_date=args.run_date,
+            resume=args.resume,
+            batch_size=args.batch_size,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result.get("status") == "complete" else 1
+
+    if args.command == "verify-daily-prices":
+        report = verify_daily_prices(
+            config.snapshot_dir,
+            config.universe_file,
+            session_date=args.run_date,
+            min_coverage=args.fail_under,
+        )
+        rendered = json.dumps(report, indent=2, sort_keys=True)
+        print(rendered)
+        if args.json_out:
+            output = Path(args.json_out)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(rendered + "\n", encoding="utf-8")
+        return 0 if report.get("ok") else 1
 
     if args.command == "market-context":
         symbols = tuple(
@@ -254,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
             remote_root,
             load_dropbox_secrets(),
             run_date=args.run_date,
+            universe_file=config.universe_file,
         )
         print(f"dropbox_recovery_uploaded_files={count}")
         return 0

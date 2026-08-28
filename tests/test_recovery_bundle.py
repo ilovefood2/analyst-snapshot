@@ -5,16 +5,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 from analyst_snapshot import dropbox_sync
-from analyst_snapshot.datasets import DATASETS, MARKET_CONTEXT_DATASETS
+from analyst_snapshot.daily_prices import daily_price_manifest_path
+from analyst_snapshot.datasets import DAILY_PRICES_DATASET, DATASETS, MARKET_CONTEXT_DATASETS
 from analyst_snapshot.recovery_bundle import (
     RECOVERY_BUNDLE_SCHEMA,
     RecoveryBundleError,
+    _schema_sha256,
     finalize_recovery_bundle,
     manifest_identity_sha256,
     recovery_manifest_path,
+    sha256_file,
 )
 from analyst_snapshot.storage import dataset_path, write_parquet
 
@@ -59,6 +63,36 @@ def _candidate(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
             name,
         )
 
+    price_path = dataset_path(archive, DAILY_PRICES_DATASET, SESSION_DATE)
+    write_parquet(
+        price_path,
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "AAPL",
+                    "canonical_symbol": "AAPL",
+                    "dataset": DAILY_PRICES_DATASET,
+                    "available_at_utc": POST_CLOSE,
+                    "run_id": "price_test",
+                }
+            ]
+        ),
+        DAILY_PRICES_DATASET,
+    )
+    price_manifest = daily_price_manifest_path(archive, SESSION_DATE)
+    price_manifest.parent.mkdir(parents=True)
+    price_manifest.write_text(
+        json.dumps(
+            {
+                "schema": "analyst_snapshot_daily_prices_manifest_v1",
+                "status": "complete",
+                "dataset": DAILY_PRICES_DATASET,
+                "session_date": SESSION_DATE,
+            }
+        ),
+        encoding="utf-8",
+    )
+
     run_manifest = archive / "_manifests" / f"date={SESSION_DATE}" / "run_test.json"
     run_manifest.parent.mkdir(parents=True)
     run_manifest.write_text(
@@ -87,6 +121,35 @@ def _candidate(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
         "analyst_snapshot.recovery_bundle.verify_market_context",
         lambda *_args, **_kwargs: {"ok": True, "run_date": SESSION_DATE, "errors": []},
     )
+    monkeypatch.setattr(
+        "analyst_snapshot.recovery_bundle.verify_daily_prices",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "errors": [],
+            "coverage": {
+                "expected_symbols": 1,
+                "observed_symbols": 1,
+                "matched_symbols": 1,
+                "ratio": 1.0,
+            },
+            "provider": {
+                "provider_name": "yahoo",
+                "transport": "yfinance",
+                "intended_use": "historical_gap_recovery",
+            },
+            "output": {
+                "path": price_path.relative_to(archive).as_posix(),
+                "rows": pq.ParquetFile(price_path).metadata.num_rows,
+                "bytes": price_path.stat().st_size,
+                "sha256": sha256_file(price_path),
+                "schema_sha256": _schema_sha256(pq.read_schema(price_path)),
+            },
+            "manifest": {
+                "sha256": sha256_file(price_manifest),
+                "identity_sha256": None,
+            },
+        },
+    )
     return archive, universe
 
 
@@ -112,6 +175,8 @@ def test_finalizer_seals_complete_hash_addressed_inventory(tmp_path: Path, monke
     assert manifest["generation_id"] == "generation_test"
     assert manifest["session_market_close_utc"] == "2026-08-27T20:00:00Z"
     assert manifest["coverage"]["recommendations"]["ratio"] == 1.0
+    assert manifest["coverage"][DAILY_PRICES_DATASET]["ratio"] == 1.0
+    assert manifest["providers"]["daily_prices"]["provider_name"] == "yahoo"
     assert manifest["producer"]["git_sha"] == "abc123"
     assert manifest["manifest_identity_sha256"] == manifest_identity_sha256(manifest)
     paths = [entry["path"] for entry in manifest["files"]]
@@ -121,6 +186,7 @@ def test_finalizer_seals_complete_hash_addressed_inventory(tmp_path: Path, monke
     assert all(entry["rows"] == 1 for entry in parquet)
     assert all(len(entry["sha256"]) == 64 for entry in manifest["files"])
     assert all(len(entry["schema_sha256"]) == 64 for entry in parquet)
+    assert any(entry["kind"] == "daily_price_manifest" for entry in manifest["files"])
     assert recovery_manifest_path(archive, SESSION_DATE).is_file()
     generation, publish_files = dropbox_sync._validate_recovery_manifest(
         manifest,
@@ -194,6 +260,42 @@ def test_finalizer_rejects_market_context_failure(tmp_path: Path, monkeypatch) -
     )
 
     with pytest.raises(RecoveryBundleError, match="tampered"):
+        _seal(archive, universe)
+
+
+def test_finalizer_rejects_daily_price_failure(tmp_path: Path, monkeypatch) -> None:
+    archive, universe = _candidate(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "analyst_snapshot.recovery_bundle.verify_daily_prices",
+        lambda *_args, **_kwargs: {"ok": False, "errors": ["missing exact QQQ target"]},
+    )
+
+    with pytest.raises(RecoveryBundleError, match="missing exact QQQ target"):
+        _seal(archive, universe)
+
+
+def test_finalizer_rejects_price_bytes_changed_after_strict_verify(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive, universe = _candidate(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "analyst_snapshot.recovery_bundle.verify_daily_prices",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "errors": [],
+            "output": {
+                "path": f"daily_prices/date={SESSION_DATE}/data.parquet",
+                "rows": 1,
+                "bytes": 1,
+                "sha256": "0" * 64,
+                "schema_sha256": "0" * 64,
+            },
+            "manifest": {"sha256": "0" * 64, "identity_sha256": None},
+        },
+    )
+
+    with pytest.raises(RecoveryBundleError, match="changed after strict verification"):
         _seal(archive, universe)
 
 

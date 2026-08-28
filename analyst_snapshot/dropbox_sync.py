@@ -11,7 +11,14 @@ from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from analyst_snapshot.datasets import DATASETS, MARKET_CONTEXT_DATASETS, RATING_EVENTS_DATASET
+from analyst_snapshot.daily_prices import verify_daily_prices
+from analyst_snapshot.datasets import (
+    DAILY_PRICES_DATASET,
+    DATASETS,
+    MARKET_CONTEXT_DATASETS,
+    RATING_EVENTS_DATASET,
+)
+from analyst_snapshot.trading_calendar import session_market_close_utc
 
 TOKEN_URL = "https://api.dropboxapi.com/oauth2/token"
 AUTH_URL = "https://www.dropbox.com/oauth2/authorize"
@@ -19,12 +26,14 @@ CONTENT_API_URL = "https://content.dropboxapi.com/2"
 MAX_SINGLE_UPLOAD_BYTES = 150 * 1024 * 1024
 CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 DROPBOX_CONTENT_HASH_BLOCK_BYTES = 4 * 1024 * 1024
-RECOVERY_BUNDLE_SCHEMA = "swinglab_recovery_bundle_v1"
-RECOVERY_READY_SCHEMA = "swinglab_recovery_ready_v1"
+RECOVERY_BUNDLE_SCHEMA = "swinglab_recovery_bundle_v2"
+RECOVERY_READY_SCHEMA = "swinglab_recovery_ready_v2"
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _GENERATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-_REQUIRED_PARQUET_DATASETS = {spec.name for spec in DATASETS.values()} | set(
-    MARKET_CONTEXT_DATASETS
+_REQUIRED_PARQUET_DATASETS = (
+    {spec.name for spec in DATASETS.values()}
+    | set(MARKET_CONTEXT_DATASETS)
+    | {DAILY_PRICES_DATASET}
 )
 
 
@@ -141,6 +150,7 @@ def publish_recovery_bundle(
     remote_root: str,
     secrets: DropboxSecrets,
     run_date: str,
+    universe_file: Path | None = None,
 ) -> int:
     """Validate and publish one immutable recovery generation to Dropbox.
 
@@ -161,6 +171,18 @@ def publish_recovery_bundle(
         local_archive=local_archive,
         run_date=run_date,
     )
+    price_report = verify_daily_prices(
+        local_archive,
+        universe_file or Path(os.getenv("UNIVERSE_FILE", "./universe.txt")),
+        session_date=run_date,
+        min_coverage=0.95,
+    )
+    if not price_report.get("ok"):
+        raise ValueError(
+            "Recovery daily_prices semantic verification failed: "
+            + "; ".join(str(error) for error in price_report.get("errors", []))
+        )
+    _bind_verified_daily_price_evidence(manifest, price_report)
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     manifest_identity_sha256 = str(manifest["manifest_identity_sha256"])
 
@@ -248,6 +270,51 @@ def publish_recovery_bundle(
     return uploaded
 
 
+def _bind_verified_daily_price_evidence(
+    manifest: dict[str, Any],
+    price_report: dict[str, Any],
+) -> None:
+    providers = manifest.get("providers")
+    coverage = manifest.get("coverage")
+    if (
+        not isinstance(providers, dict)
+        or providers.get("daily_prices") != price_report.get("provider")
+        or not isinstance(coverage, dict)
+        or coverage.get(DAILY_PRICES_DATASET) != price_report.get("coverage")
+    ):
+        raise ValueError(
+            "Recovery manifest price provider/coverage differs from strict verification"
+        )
+    inventory = manifest.get("files")
+    if not isinstance(inventory, list):
+        raise ValueError("Recovery manifest files must be a list")
+    price_entries = [
+        item
+        for item in inventory
+        if isinstance(item, dict) and item.get("dataset") == DAILY_PRICES_DATASET
+    ]
+    price_manifest_entries = [
+        item
+        for item in inventory
+        if isinstance(item, dict) and item.get("kind") == "daily_price_manifest"
+    ]
+    if len(price_entries) != 1 or len(price_manifest_entries) != 1:
+        raise ValueError("Recovery manifest does not bind exactly one verified price pair")
+    verified_output = price_report.get("output")
+    verified_manifest = price_report.get("manifest")
+    if not isinstance(verified_output, dict) or not isinstance(verified_manifest, dict):
+        raise ValueError("Recovery daily_prices verifier omitted physical evidence")
+    price_entry = price_entries[0]
+    if any(
+        price_entry.get(field) != verified_output.get(field)
+        for field in ("path", "rows", "bytes", "sha256", "schema_sha256")
+    ):
+        raise ValueError("Recovery manifest daily_prices evidence differs from strict verification")
+    price_manifest_entry = price_manifest_entries[0]
+    if price_manifest_entry.get("sha256") != verified_manifest.get("sha256"):
+        raise ValueError("Recovery manifest daily_price_manifest differs from strict verification")
+
+
 def _load_recovery_manifest(manifest_path: Path) -> tuple[dict[str, Any], bytes]:
     try:
         raw = manifest_path.read_bytes()
@@ -268,6 +335,26 @@ def _validate_recovery_manifest(
     local_archive: Path,
     run_date: str,
 ) -> tuple[str, list[tuple[Path, int, str, str]]]:
+    expected_manifest_keys = {
+        "schema",
+        "status",
+        "session_date",
+        "generation_id",
+        "session_market_close_utc",
+        "sealed_at_utc",
+        "analyst_snapshot_version",
+        "providers",
+        "universe",
+        "coverage_threshold",
+        "coverage",
+        "market_context",
+        "analyst_run_ids",
+        "producer",
+        "files",
+        "manifest_identity_sha256",
+    }
+    if set(manifest) != expected_manifest_keys:
+        raise ValueError("Recovery v2 manifest top-level keys drifted")
     if manifest.get("schema") != RECOVERY_BUNDLE_SCHEMA:
         raise ValueError(f"Recovery manifest schema must be {RECOVERY_BUNDLE_SCHEMA}")
     if manifest.get("status") != "complete":
@@ -277,6 +364,32 @@ def _validate_recovery_manifest(
             "Recovery manifest session_date does not match requested run date: "
             f"{manifest.get('session_date')!r} != {run_date!r}"
         )
+    close = _parse_utc(manifest.get("session_market_close_utc"), "session_market_close_utc")
+    try:
+        expected_close = session_market_close_utc(date.fromisoformat(run_date))
+    except ValueError as exc:
+        raise ValueError(f"Recovery run_date is not an XNYS session: {run_date}") from exc
+    if close != expected_close:
+        raise ValueError("Recovery v2 manifest session_market_close_utc is not the XNYS close")
+    sealed = _parse_utc(manifest.get("sealed_at_utc"), "sealed_at_utc")
+    if sealed < close:
+        raise ValueError("Recovery v2 manifest was sealed before the session close")
+    if manifest.get("coverage_threshold") != 0.95:
+        raise ValueError("Recovery v2 manifest coverage_threshold must be exactly 0.95")
+    providers = manifest.get("providers")
+    if not isinstance(providers, dict):
+        raise ValueError("Recovery v2 manifest providers must be an object")
+    daily_price_provider = providers.get("daily_prices")
+    if (
+        not isinstance(daily_price_provider, dict)
+        or daily_price_provider.get("provider_name") != "yahoo"
+        or daily_price_provider.get("transport") != "yfinance"
+        or daily_price_provider.get("intended_use") != "historical_gap_recovery"
+    ):
+        raise ValueError("Recovery v2 manifest daily_prices provider contract is invalid")
+    coverage = manifest.get("coverage")
+    if not isinstance(coverage, dict) or not isinstance(coverage.get(DAILY_PRICES_DATASET), dict):
+        raise ValueError("Recovery v2 manifest daily_prices coverage is missing")
 
     expected_manifest_identity = manifest.get("manifest_identity_sha256")
     if not isinstance(expected_manifest_identity, str) or not _SHA256_PATTERN.fullmatch(
@@ -300,12 +413,16 @@ def _validate_recovery_manifest(
     inventory = manifest.get("files")
     if not isinstance(inventory, list) or not inventory:
         raise ValueError("Recovery manifest must contain at least one data file")
+    inventory_paths = [item.get("path") if isinstance(item, dict) else None for item in inventory]
+    if inventory_paths != sorted(inventory_paths, key=lambda value: str(value)):
+        raise ValueError("Recovery manifest file inventory is not path-sorted")
 
     archive_root = local_archive.resolve()
     expected_date_part = f"date={run_date}"
     seen_paths: set[str] = set()
     parquet_datasets: set[str] = set()
     analyst_manifest_count = 0
+    daily_price_manifest_count = 0
     market_manifest_count = 0
     market_source_count = 0
     files: list[tuple[Path, int, str, str]] = []
@@ -353,6 +470,20 @@ def _validate_recovery_manifest(
 
         kind = item.get("kind")
         if kind == "parquet":
+            expected_entry_keys = {
+                "path",
+                "kind",
+                "bytes",
+                "sha256",
+                "dataset",
+                "rows",
+                "schema_sha256",
+                "pit_column",
+                "pit_min_utc",
+                "pit_max_utc",
+            }
+            if set(item) != expected_entry_keys:
+                raise ValueError(f"Recovery manifest files[{index}] Parquet keys drifted")
             dataset = item.get("dataset")
             allowed = _REQUIRED_PARQUET_DATASETS | {RATING_EVENTS_DATASET}
             if not isinstance(dataset, str) or dataset not in allowed:
@@ -370,11 +501,38 @@ def _validate_recovery_manifest(
                 value = item.get(field)
                 if not isinstance(value, str) or not value:
                     raise ValueError(f"Recovery manifest files[{index}].{field} is missing")
+            pit_min = _parse_utc(item.get("pit_min_utc"), f"files[{index}].pit_min_utc")
+            pit_max = _parse_utc(item.get("pit_max_utc"), f"files[{index}].pit_max_utc")
+            if pit_min < close or pit_max < pit_min or pit_max > sealed:
+                raise ValueError(f"Recovery manifest files[{index}] PIT interval is invalid")
+            if dataset == DAILY_PRICES_DATASET:
+                expected_path = f"{DAILY_PRICES_DATASET}/{expected_date_part}/data.parquet"
+                if relative_path != expected_path:
+                    raise ValueError(
+                        f"Recovery daily_prices path must be {expected_path}: {relative_path}"
+                    )
+                if item.get("pit_column") != "available_at_utc":
+                    raise ValueError("Recovery daily_prices PIT column must be available_at_utc")
         elif kind == "analyst_run_manifest":
+            if set(item) != {"path", "kind", "bytes", "sha256"}:
+                raise ValueError(f"Recovery manifest files[{index}] role keys drifted")
             analyst_manifest_count += 1
+        elif kind == "daily_price_manifest":
+            if set(item) != {"path", "kind", "bytes", "sha256"}:
+                raise ValueError(f"Recovery manifest files[{index}] role keys drifted")
+            daily_price_manifest_count += 1
+            expected_path = f"_daily_price_manifests/{expected_date_part}/manifest.json"
+            if relative_path != expected_path:
+                raise ValueError(
+                    f"Recovery daily_price_manifest path must be {expected_path}: {relative_path}"
+                )
         elif kind == "market_context_manifest":
+            if set(item) != {"path", "kind", "bytes", "sha256"}:
+                raise ValueError(f"Recovery manifest files[{index}] role keys drifted")
             market_manifest_count += 1
         elif kind == "market_context_source":
+            if set(item) != {"path", "kind", "bytes", "sha256"}:
+                raise ValueError(f"Recovery manifest files[{index}] role keys drifted")
             market_source_count += 1
         else:
             raise ValueError(f"Recovery manifest files[{index}].kind is invalid")
@@ -393,6 +551,8 @@ def _validate_recovery_manifest(
         )
     if analyst_manifest_count < 1:
         raise ValueError("Recovery manifest requires at least one analyst_run_manifest")
+    if daily_price_manifest_count != 1:
+        raise ValueError("Recovery manifest requires exactly one daily_price_manifest")
     if market_manifest_count != 1:
         raise ValueError("Recovery manifest requires exactly one market_context_manifest")
     if market_source_count < 1:
@@ -489,6 +649,18 @@ def _validate_run_date(run_date: str) -> None:
         raise ValueError(f"Recovery run_date is not a valid ISO date: {run_date!r}") from exc
     if parsed.isoformat() != run_date:
         raise ValueError(f"Recovery run_date is not canonical YYYY-MM-DD: {run_date!r}")
+
+
+def _parse_utc(value: Any, role: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Recovery {role} is missing")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Recovery {role} is not ISO-8601") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"Recovery {role} is timezone-naive")
+    return parsed.astimezone(UTC)
 
 
 def _utc_now() -> str:

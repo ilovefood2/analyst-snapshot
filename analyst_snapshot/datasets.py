@@ -144,6 +144,28 @@ MARKET_CONTEXT_DATASETS = (
     "finra_short_volume",
     "occ_account_volume",
 )
+DAILY_PRICES_DATASET = "daily_prices"
+DAILY_PRICE_MANIFEST_SCHEMA = "analyst_snapshot_daily_prices_manifest_v1"
+
+# Provider-neutral symbols needed by the active Trend overlays even when they are absent from the
+# broad equity universe.  Keep this separate from DATASETS: daily prices are a batch download, not
+# a ninth per-Ticker analyst attribute.
+TREND_PRICE_ANCHORS: tuple[str, ...] = (
+    "QQQ",
+    "SPY",
+    "IWM",
+    "HYG",
+    "LQD",
+    "TLT",
+    "IEF",
+    "RSP",
+    "SOXX",
+    "XLK",
+    "XLP",
+    "XLU",
+    "VIXY",
+    "VXZ",
+)
 
 # Dedupe key for the rating-event log. `event_utc` carries Yahoo's GradeDate verbatim; `fromGrade`
 # is part of the key so two same-day actions by one firm are never collapsed into one event.
@@ -174,6 +196,42 @@ _EVENT_COLUMNS: dict[str, pa.DataType] = {
     "priorPriceTarget": pa.float64(),
 }
 
+# Exact cross-repository contract consumed by SwingLab Daily.  Column order is part of the
+# contract, which is why this is one insertion-ordered mapping rather than a set of loose fields.
+DAILY_PRICE_SCHEMA: dict[str, pa.DataType] = {
+    "dataset": _STRING,
+    "run_id": _STRING,
+    "target_session": pa.date32(),
+    "bar_session": pa.date32(),
+    "symbol": _STRING,
+    "canonical_symbol": _STRING,
+    "provider_symbol": _STRING,
+    "provider_name": _STRING,
+    "transport": _STRING,
+    "provider_version": _STRING,
+    "currency": _STRING,
+    "unadjusted_price_basis": _STRING,
+    "adjusted_price_basis": _STRING,
+    "unadjusted_open": pa.float64(),
+    "unadjusted_high": pa.float64(),
+    "unadjusted_low": pa.float64(),
+    "unadjusted_close": pa.float64(),
+    "adjusted_open": pa.float64(),
+    "adjusted_high": pa.float64(),
+    "adjusted_low": pa.float64(),
+    "adjusted_close": pa.float64(),
+    "volume": pa.float64(),
+    "adjustment_factor": pa.float64(),
+    "dividend_cash": pa.float64(),
+    "stock_split_ratio": pa.float64(),
+    "capture_started_utc": _STRING,
+    "capture_finished_utc": _STRING,
+    "available_at_utc": _STRING,
+    "is_target_session": pa.bool_(),
+    "batch_id": _STRING,
+    "raw_record_sha256": _STRING,
+}
+
 # Yahoo's own spellings. Verified byte-identical to the canonical columns across 1.07M archived
 # rows, so new partitions keep only the canonical ones; storing both doubles the largest dataset.
 # Partitions written before 0.2.0 still carry these, and the reader fills the canonical columns
@@ -187,6 +245,7 @@ LEGACY_EVENT_COLUMNS: dict[str, str] = {
 }
 
 CORE_SCHEMAS: dict[str, dict[str, pa.DataType]] = {
+    DAILY_PRICES_DATASET: DAILY_PRICE_SCHEMA,
     "recommendations": {
         **_COMMON_COLUMNS,
         "period": _STRING,
