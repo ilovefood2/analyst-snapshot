@@ -16,6 +16,10 @@ from analyst_snapshot.dropbox_sync import (
 )
 from analyst_snapshot.logging_utils import JsonlLogger
 from analyst_snapshot.market_context import run_market_context, verify_market_context
+from analyst_snapshot.price_recovery import (
+    finalize_price_recovery_bundle,
+    publish_price_recovery_bundle,
+)
 from analyst_snapshot.reader import archive_summary
 from analyst_snapshot.recovery_bundle import finalize_recovery_bundle
 from analyst_snapshot.runner import RunSummary, read_universe, run_id, run_snapshot
@@ -153,6 +157,14 @@ def build_parser() -> argparse.ArgumentParser:
     publish_recovery_parser.add_argument("--remote-root", default=None)
     publish_recovery_parser.add_argument("--run-date", required=True)
 
+    publish_price_recovery_parser = subparsers.add_parser(
+        "upload-price-recovery-bundle",
+        help="Publish one sealed price-only generation, with PRICE_READY written last.",
+    )
+    publish_price_recovery_parser.add_argument("--local-dir", default=None)
+    publish_price_recovery_parser.add_argument("--remote-root", default=None)
+    publish_price_recovery_parser.add_argument("--run-date", required=True)
+
     seal_parser = subparsers.add_parser(
         "seal-recovery-bundle",
         help="Strictly validate and seal one completed-session recovery bundle.",
@@ -166,6 +178,20 @@ def build_parser() -> argparse.ArgumentParser:
     seal_parser.add_argument("--workflow-run-id")
     seal_parser.add_argument("--workflow-run-attempt")
     seal_parser.add_argument("--json-out")
+
+    seal_price_parser = subparsers.add_parser(
+        "seal-price-recovery-bundle",
+        help="Strictly validate and seal the independent Daily-price file pair.",
+    )
+    seal_price_parser.add_argument("--run-date", required=True)
+    seal_price_parser.add_argument("--generation-id")
+    seal_price_parser.add_argument("--min-coverage", type=float, choices=(0.95,), default=0.95)
+    seal_price_parser.add_argument("--repository")
+    seal_price_parser.add_argument("--git-ref")
+    seal_price_parser.add_argument("--git-sha")
+    seal_price_parser.add_argument("--workflow-run-id")
+    seal_price_parser.add_argument("--workflow-run-attempt")
+    seal_price_parser.add_argument("--json-out")
 
     should_run_parser = subparsers.add_parser("should-run")
     should_run_parser.add_argument("--as-of-date", help="New York calendar date, YYYY-MM-DD.")
@@ -327,6 +353,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dropbox_recovery_uploaded_files={count}")
         return 0
 
+    if args.command == "upload-price-recovery-bundle":
+        local_dir = Path(args.local_dir) if args.local_dir else config.snapshot_dir
+        remote_root = args.remote_root or config.dropbox_remote_root
+        count = publish_price_recovery_bundle(
+            local_dir,
+            remote_root,
+            load_dropbox_secrets(),
+            run_date=args.run_date,
+            universe_file=config.universe_file,
+        )
+        print(f"dropbox_price_recovery_uploaded_files={count}")
+        return 0
+
     if args.command == "seal-recovery-bundle":
         producer = {
             key: value
@@ -340,6 +379,34 @@ def main(argv: list[str] | None = None) -> int:
             if value
         }
         manifest = finalize_recovery_bundle(
+            config.snapshot_dir,
+            config.universe_file,
+            session_date=args.run_date,
+            min_coverage=args.min_coverage,
+            generation_id=args.generation_id,
+            producer_identity=producer,
+        )
+        rendered = json.dumps(manifest, indent=2, sort_keys=True)
+        print(rendered)
+        if args.json_out:
+            output = Path(args.json_out)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(rendered + "\n", encoding="utf-8")
+        return 0
+
+    if args.command == "seal-price-recovery-bundle":
+        producer = {
+            key: value
+            for key, value in {
+                "repository": args.repository,
+                "git_ref": args.git_ref,
+                "git_sha": args.git_sha,
+                "workflow_run_id": args.workflow_run_id,
+                "workflow_run_attempt": args.workflow_run_attempt,
+            }.items()
+            if value
+        }
+        manifest = finalize_price_recovery_bundle(
             config.snapshot_dir,
             config.universe_file,
             session_date=args.run_date,

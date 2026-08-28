@@ -12,19 +12,25 @@ def test_recovery_workflow_verifies_and_seals_before_ready_publication() -> None
 
     price_capture = workflow.index("- name: Capture Daily price recovery tail")
     price_verify = workflow.index("- name: Verify Daily price recovery tail")
+    price_seal = workflow.index("- name: Seal independent Daily price recovery")
+    price_publish = workflow.index("- name: Publish independent Daily price recovery to Dropbox")
     analyst_run = workflow.index("- name: Run analyst snapshot")
     analyst_verify = workflow.index("- name: Verify snapshot")
     market_verify = workflow.index("- name: Verify prospective market context")
     seal = workflow.index("- name: Seal completed-session recovery bundle")
     publish = workflow.index("- name: Publish verified recovery bundle to Dropbox")
-    final_gate = workflow.index("- name: Enforce recovery publication result")
+    price_gate = workflow.index("- name: Enforce independent price publication result")
+    final_gate = workflow.index("- name: Enforce full recovery publication result")
 
-    assert price_capture < price_verify < analyst_run
+    assert price_capture < price_verify < price_seal < price_publish < analyst_run
     assert price_verify < analyst_verify < seal
-    assert market_verify < seal < publish < final_gate
+    assert market_verify < seal < publish < price_gate < final_gate
     assert "steps.verify_daily_prices.outcome == 'success'" in workflow
     assert "PRICE_VERIFY: ${{ steps.verify_daily_prices.outcome }}" in workflow
     assert "upload-recovery-bundle" in workflow
+    assert "upload-price-recovery-bundle" in workflow
+    assert "GENERATION_ID: price_gh_${{ github.run_id }}_${{ github.run_attempt }}" in workflow
+    assert "GENERATION_ID: full_gh_${{ github.run_id }}_${{ github.run_attempt }}" in workflow
     assert "run: python -m analyst_snapshot upload-dropbox" not in workflow
 
 
@@ -79,3 +85,33 @@ def test_workflow_price_capture_is_serial_batched_and_not_used_for_symbol_smoke(
     assert "/archive/daily_prices/" in ignored
     assert "/archive/_daily_price_manifests/" in ignored
     assert "/archive/_daily_price_checkpoints/" in ignored
+    assert "/archive/_price_recovery_manifests/" in ignored
+
+
+def test_price_only_is_typed_and_skips_every_full_bundle_step() -> None:
+    workflow = _workflow()
+    price_input = workflow.index("      price_only:")
+    permissions = workflow.index("permissions:")
+    input_block = workflow[price_input:permissions]
+    assert "default: false" in input_block
+    assert "type: boolean" in input_block
+    assert "github.event.inputs.price_only" not in workflow
+    assert "inputs.price_only == true && inputs.symbols != ''" in workflow
+
+    full_step_names = (
+        "Capture free prospective market context",
+        "Run analyst snapshot",
+        "Commit archive updates",
+        "Verify snapshot",
+        "Verify prospective market context",
+        "Seal completed-session recovery bundle",
+        "Enforce full recovery publication result",
+    )
+    for step_name in full_step_names:
+        start = workflow.index(f"- name: {step_name}")
+        next_step = workflow.find("\n      - name:", start + 1)
+        block = workflow[start : next_step if next_step >= 0 else len(workflow)]
+        assert "inputs.price_only != true" in block, step_name
+
+    assert "(steps.publish_price_recovery.outcome == 'success' || inputs.symbols != '')" in workflow
+    assert "price-recovery-bundle-*.json" in workflow

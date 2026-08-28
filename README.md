@@ -321,26 +321,28 @@ What it does:
   prices instead of growing Git by hundreds of thousands of rows per session.
 - Captures Yahoo raw and adjusted OHLCV for the exact latest 30 XNYS sessions in serial 50-symbol
   batches, covering `universe.txt` plus the 14 fixed Trend anchors.
-- Verifies price exact-target/tail coverage, adjustment parity, analyst coverage, market-context
-  provenance, schema, hashes and post-close PIT timestamps before sealing a recovery bundle.
-- Publishes an immutable Dropbox generation and writes `_READY.json` last. A degraded or partial
-  run may still be preserved in Git for diagnosis, but it can never become a recovery source.
+- Verifies price exact-target/tail coverage, adjustment parity, schema, hashes and post-close PIT;
+  then immediately publishes an immutable price generation and writes `_PRICE_READY.json` last,
+  before the multi-hour analyst loop begins.
+- Continues with analyst and market-context collection for normal/scheduled runs, then publishes the
+  complete generation and writes `_READY.json` last. `workflow_dispatch price_only=true` stops after
+  the independent price publication.
 - Supports comma-separated `symbols` for smoke tests. Symbol-scoped runs never publish recovery
   bundles.
 
 The workflow uses the built-in `GITHUB_TOKEN`; no Yahoo API key or cloud secret is required.
 
 Because the repo is private, GitHub Actions usage counts against your account's included private
-repo minutes. The 30-session broad price tail materially increases each Daily generation, and
-`.git` grows with committed archive bytes and never shrinks. The storage approach is intentionally
-simple to start, but plan to move large immutable payloads to object storage such as Cloudflare R2,
-Backblaze B2, or S3-compatible storage as the archive grows, keeping this workflow as the scheduler.
+repo minutes. The broad price tail is Git-ignored and persists in Dropbox rather than repository
+history; the analyst/context archive is still committed and `.git` never shrinks. Plan to move the
+remaining large immutable archive to object storage as the repository grows.
 
 ## Dropbox Recovery Bundles
 
-The GitHub Actions workflow publishes only a fully sealed completed-session generation to Dropbox.
-Missing Dropbox credentials, an empty inventory, a hash mismatch or an upload conflict fails the
-workflow; none of those cases writes `_READY.json`.
+The GitHub Actions workflow publishes two non-conflicting completed-session authorities to Dropbox:
+an early price-only generation and, on full runs, the later complete generation. Missing Dropbox
+credentials, an empty inventory, semantic/hash drift or an upload conflict fails closed; none of
+those cases writes its READY pointer.
 
 Create a Dropbox app in the Dropbox App Console:
 
@@ -383,15 +385,30 @@ python -m analyst_snapshot seal-recovery-bundle --run-date 2026-08-18 \
 python -m analyst_snapshot upload-recovery-bundle --run-date 2026-08-18
 ```
 
+The authoritative price-only wrapper requires the exact GitHub repository/ref/SHA/run provenance
+and is produced by the Workflow. Do not fabricate those fields for a manual local publication.
+
 The publish layout is immutable and generation-addressed:
 
 ```text
 /DailyStockSnapshots/date=YYYY-MM-DD/
+  _PRICE_READY.json
+  price_generations/<generation_id>/
+    manifest.json
+    _daily_price_manifests/date=YYYY-MM-DD/manifest.json
+    daily_prices/date=YYYY-MM-DD/data.parquet
   _READY.json
   generations/<generation_id>/
     manifest.json
     <archive-relative inventoried files>
 ```
+
+`_PRICE_READY.json` uses `swinglab_price_recovery_ready_v1` and points to one
+`swinglab_price_recovery_bundle_v1` under `price_generations/`. That bundle has exactly 12 top-level
+keys and exactly two sorted files: the strict Daily-price source manifest and Parquet. It carries
+the same provider and coverage objects as the full v2 bundle. Consumers may use it as soon as it is
+valid; if both READY families exist, their price file/manifests must have identical hashes or the
+date fails closed.
 
 `manifest.json` uses schema `swinglab_recovery_bundle_v2`. Version 2 requires the sealed
 `daily_prices` Parquet and its price manifest in addition to the analyst and market-context roles.
@@ -428,7 +445,11 @@ snapshot` with:
 run_date=<today's completed XNYS session>
 fresh=true
 symbols=<empty>
+price_only=true
 ```
+
+Set `price_only=false` (the default) for the normal full analyst/market run. Scheduled runs always
+publish the price authority first and then continue to the full generation.
 
 For an App Folder Dropbox app, these paths are relative to the app's own Dropbox folder.
 

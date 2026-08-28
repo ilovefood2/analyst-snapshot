@@ -25,6 +25,7 @@ archive/
   _market_context_manifests/date=YYYY-MM-DD/manifest.json
   _market_context_sources/date=YYYY-MM-DD/*
   _daily_price_manifests/date=YYYY-MM-DD/manifest.json
+  _price_recovery_manifests/date=YYYY-MM-DD/manifest.json
   _recovery_manifests/date=YYYY-MM-DD/manifest.json
 ```
 
@@ -45,6 +46,14 @@ as if it were a partition, and every row it holds is counted twice.
 the XNYS session has closed, every inventoried PIT timestamp is post-close, coverage and
 market-context and Daily-price checks pass, and every byte, SHA-256, row count and Arrow schema
 hash verifies. Version 1 bundles predate `daily_prices` and are not price-capable recovery inputs.
+
+`_price_recovery_manifests` is the independent early price seal. Its schema is
+`swinglab_price_recovery_bundle_v1`; it has exactly 12 top-level keys and inventories exactly two
+sorted files (`daily_prices` and `_daily_price_manifests`). Dropbox publishes it below
+`price_generations/<generation_id>/manifest.json` and writes date-root `_PRICE_READY.json` with
+schema `swinglab_price_recovery_ready_v1` only after both immutable files and manifest verify.
+This pointer coexists with the later full-v2 `_READY.json`; if both exist, their price hashes must
+agree exactly.
 
 ## The two timestamps, and the lookahead rule
 
@@ -77,6 +86,9 @@ is the PIT authority; neither `bar_session` nor the session close is an availabi
 Each row carries both unadjusted OHLC and the fully adjusted OHLC derived from the same Yahoo
 response (`factor = Adj Close / Close`), plus dividend and split evidence. Dropbox is transport;
 `provider_name` remains `yahoo` and must never be relabelled as Futu, IBKR or FMP.
+Yahoo `Adj Close` is preserved exactly. Derived adjusted high/low are clamped only to the derived
+open/exact-close envelope to neutralize a one-float64-ULP division/multiplication round trip when
+raw high or low equals close; raw OHLC validity and tight factor parity remain independently gated.
 
 The requested price inventory is `universe.txt` plus the exact Trend anchors
 `QQQ, SPY, IWM, HYG, LQD, TLT, IEF, RSP, SOXX, XLK, XLP, XLU, VIXY, VXZ`. A recovery seal requires

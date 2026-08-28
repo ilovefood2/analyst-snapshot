@@ -32,6 +32,11 @@ on:
         options:
           - "true"
           - "false"
+      price_only:
+        description: "Publish the sealed Daily-price generation only; skip analyst and market work"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -129,6 +134,12 @@ jobs:
           echo "::error::Requested run_date is not a completed XNYS session."
           exit 1
 
+      - name: Reject price-only symbol scope
+        if: inputs.price_only == true && inputs.symbols != ''
+        run: |
+          echo "::error::price_only requires an empty symbols input."
+          exit 1
+
       # Prices run before the multi-hour analyst loop. The collector uses one network lane
       # (threads=false), immutable batch checkpoints, and an exact 30-XNYS-session axis so a
       # retry can resume without parallel Yahoo fan-out.
@@ -159,11 +170,48 @@ jobs:
             --fail-under "$MIN_PRICE_COVERAGE" \
             --json-out "verify-daily-prices-$RUN_DATE.json"
 
+      - name: Seal independent Daily price recovery
+        id: seal_price_recovery
+        if: >-
+          steps.calendar.outputs.run == 'true' &&
+          !inputs.symbols &&
+          steps.verify_daily_prices.outcome == 'success'
+        env:
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+          GENERATION_ID: price_gh_${{ github.run_id }}_${{ github.run_attempt }}
+        run: |
+          python -m analyst_snapshot seal-price-recovery-bundle \
+            --run-date "$RUN_DATE" \
+            --generation-id "$GENERATION_ID" \
+            --min-coverage "$MIN_PRICE_COVERAGE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --git-ref "$GITHUB_REF" \
+            --git-sha "$GITHUB_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --json-out "price-recovery-bundle-$RUN_DATE.json"
+
+      - name: Publish independent Daily price recovery to Dropbox
+        id: publish_price_recovery
+        if: steps.seal_price_recovery.outcome == 'success'
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_REMOTE_ROOT: /DailyStockSnapshots
+          RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
+          SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
+        run: python -m analyst_snapshot upload-price-recovery-bundle --run-date "$RUN_DATE"
+
       # Run this small capture before the multi-hour Yahoo loop so the irreplaceable point-in-time
       # market context survives even when Yahoo consumes the remaining job budget. Any partial
       # capture is committed below and verify-market-context makes the workflow red afterward.
       - name: Capture free prospective market context
-        if: steps.calendar.outputs.run == 'true'
+        if: >-
+          steps.calendar.outputs.run == 'true' &&
+          inputs.price_only != true &&
+          (steps.publish_price_recovery.outcome == 'success' || inputs.symbols != '')
         timeout-minutes: 10
         continue-on-error: true
         env:
@@ -176,7 +224,10 @@ jobs:
             --symbols "$MARKET_CONTEXT_SYMBOLS"
 
       - name: Run analyst snapshot
-        if: steps.calendar.outputs.run == 'true'
+        if: >-
+          steps.calendar.outputs.run == 'true' &&
+          inputs.price_only != true &&
+          (steps.publish_price_recovery.outcome == 'success' || inputs.symbols != '')
         # Preserve a hard tail for commit, semantic verification, sealing and Dropbox publication
         # inside the 355-minute job cap. A slow analyst run fails visibly instead of consuming the
         # cleanup/publication budget and stranding price checkpoints on the ephemeral runner.
@@ -200,7 +251,12 @@ jobs:
       # always(): a run that timed out or failed part-way still fetched real data, and re-running
       # with the same --run-date and --resume picks up exactly where it stopped.
       - name: Commit archive updates
-        if: always() && steps.calendar.outputs.run == 'true' && steps.workspace.outputs.fresh != 'true'
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          inputs.price_only != true &&
+          (steps.publish_price_recovery.outcome == 'success' || inputs.symbols != '') &&
+          steps.workspace.outputs.fresh != 'true'
         env:
           RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
         run: |
@@ -225,7 +281,11 @@ jobs:
 
       - name: Verify snapshot
         id: verify_analyst
-        if: always() && steps.calendar.outputs.run == 'true'
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          inputs.price_only != true &&
+          (steps.publish_price_recovery.outcome == 'success' || inputs.symbols != '')
         continue-on-error: true
         env:
           RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
@@ -245,7 +305,11 @@ jobs:
 
       - name: Verify prospective market context
         id: verify_market_context
-        if: always() && steps.calendar.outputs.run == 'true'
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          inputs.price_only != true &&
+          (steps.publish_price_recovery.outcome == 'success' || inputs.symbols != '')
         continue-on-error: true
         env:
           RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
@@ -260,13 +324,15 @@ jobs:
         if: >-
           steps.calendar.outputs.run == 'true' &&
           !inputs.symbols &&
+          inputs.price_only != true &&
+          steps.publish_price_recovery.outcome == 'success' &&
           steps.verify_daily_prices.outcome == 'success' &&
           steps.verify_analyst.outcome == 'success' &&
           steps.verify_market_context.outcome == 'success'
         env:
           RUN_DATE: ${{ steps.calendar.outputs.trading_date }}
           SNAPSHOT_DIR: ${{ steps.workspace.outputs.snapshot_dir }}
-          GENERATION_ID: gh_${{ github.run_id }}_${{ github.run_attempt }}
+          GENERATION_ID: full_gh_${{ github.run_id }}_${{ github.run_attempt }}
         run: |
           python -m analyst_snapshot seal-recovery-bundle \
             --run-date "$RUN_DATE" \
@@ -301,12 +367,30 @@ jobs:
           path: |
             verify-*.json
             verify-daily-prices-*.json
+            price-recovery-bundle-*.json
             recovery-bundle-*.json
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Enforce recovery publication result
+      - name: Enforce independent price publication result
         if: always() && steps.calendar.outputs.run == 'true' && !inputs.symbols
+        env:
+          PRICE_VERIFY: ${{ steps.verify_daily_prices.outcome }}
+          PRICE_SEAL: ${{ steps.seal_price_recovery.outcome }}
+          PRICE_PUBLISH: ${{ steps.publish_price_recovery.outcome }}
+        run: |
+          if [ "$PRICE_VERIFY" != "success" ] || [ "$PRICE_SEAL" != "success" ] || \
+             [ "$PRICE_PUBLISH" != "success" ]; then
+            echo "::error::Price recovery publication failed: verify=$PRICE_VERIFY seal=$PRICE_SEAL publish=$PRICE_PUBLISH"
+            exit 1
+          fi
+
+      - name: Enforce full recovery publication result
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          !inputs.symbols &&
+          inputs.price_only != true
         env:
           ANALYST_VERIFY: ${{ steps.verify_analyst.outcome }}
           PRICE_VERIFY: ${{ steps.verify_daily_prices.outcome }}

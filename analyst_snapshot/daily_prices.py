@@ -989,6 +989,16 @@ def _rows_from_download(
                 errors.append(f"{canonical} {bar_session}: zero unadjusted close")
                 continue
             factor = adjusted_close / raw_close
+            adjusted_open = raw_open * factor
+            adjusted_high = raw_high * factor
+            adjusted_low = raw_low * factor
+            # Yahoo's Adj Close is retained exactly. When raw High/Low equals Close,
+            # division followed by multiplication can land one float64 ULP inside the envelope
+            # (for example 1.01 * (0.8585 / 1.01) < 0.8585). Clamp only the derived extremes to
+            # the exact derived/open-close envelope; the raw envelope is still independently
+            # validated and the factor-parity check remains tight.
+            adjusted_high = max(adjusted_high, adjusted_open, adjusted_close)
+            adjusted_low = min(adjusted_low, adjusted_open, adjusted_close)
             dividend = _optional_float(values.get(columns.get("Dividends")))
             split = _optional_float(values.get(columns.get("Stock Splits")))
             if split == 0.0:
@@ -1022,9 +1032,9 @@ def _rows_from_download(
                 "unadjusted_high": raw_high,
                 "unadjusted_low": raw_low,
                 "unadjusted_close": raw_close,
-                "adjusted_open": raw_open * factor,
-                "adjusted_high": raw_high * factor,
-                "adjusted_low": raw_low * factor,
+                "adjusted_open": adjusted_open,
+                "adjusted_high": adjusted_high,
+                "adjusted_low": adjusted_low,
                 "adjusted_close": adjusted_close,
                 "volume": volume,
                 "adjustment_factor": factor,
@@ -1167,13 +1177,16 @@ def _verify_row_contract(
             numeric["unadjusted_high"],
             numeric["unadjusted_low"],
             numeric["unadjusted_close"],
-        ) or not _valid_ohlc(
+        ):
+            _append_error(errors, f"{canonical} {bar_session}: invalid unadjusted OHLC envelope")
+            invalid_symbols.add(canonical)
+        if not _valid_ohlc(
             numeric["adjusted_open"],
             numeric["adjusted_high"],
             numeric["adjusted_low"],
             numeric["adjusted_close"],
         ):
-            _append_error(errors, f"{canonical} {bar_session}: invalid OHLC envelope")
+            _append_error(errors, f"{canonical} {bar_session}: invalid adjusted OHLC envelope")
             invalid_symbols.add(canonical)
         factor = numeric["adjustment_factor"]
         pairs = (

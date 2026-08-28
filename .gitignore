@@ -10,3 +10,4 @@ __pycache__/
 /archive/daily_prices/
 /archive/_daily_price_manifests/
 /archive/_daily_price_checkpoints/
+/archive/_price_recovery_manifests/

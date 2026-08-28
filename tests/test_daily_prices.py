@@ -15,8 +15,10 @@ from analyst_snapshot.daily_prices import (
     PRICE_SESSION_COUNT,
     UNADJUSTED_PRICE_BASIS,
     _price_sessions,
+    _rows_from_download,
     _schema_sha256,
     _sha256_file,
+    _valid_ohlc,
     daily_price_manifest_path,
     run_daily_prices,
     verify_daily_prices,
@@ -182,6 +184,121 @@ def test_schema_and_trend_anchor_contract_is_exact() -> None:
     )
 
 
+def test_adjusted_ohlc_roundoff_preserves_exact_envelope() -> None:
+    target = date(2026, 8, 27)
+    raw_close = 1.01
+    adjusted_close = 0.8585
+    assert raw_close * (adjusted_close / raw_close) < adjusted_close
+    fields = {
+        "Open": 1.00,
+        "High": raw_close,
+        "Low": 0.99,
+        "Close": raw_close,
+        "Adj Close": adjusted_close,
+        "Volume": 1000.0,
+    }
+    payload = pd.DataFrame(
+        {("AAPL", field): [value] for field, value in fields.items()},
+        index=pd.to_datetime([target]),
+    )
+    payload.columns = pd.MultiIndex.from_tuples(payload.columns)
+
+    rows, errors = _rows_from_download(
+        payload,
+        canonical_batch=["AAPL"],
+        provider_batch=["AAPL"],
+        canonical_by_provider={"AAPL": "AAPL"},
+        sessions=[target],
+        target_session=target,
+        run_id="roundoff-test",
+        batch_id="batch_0001",
+        provider_version="test",
+        capture_started_utc="2026-08-27T22:00:00Z",
+        capture_finished_utc="2026-08-27T22:00:01Z",
+    )
+
+    assert errors == []
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["adjusted_close"] == adjusted_close
+    assert row["adjusted_high"] == adjusted_close
+    assert _valid_ohlc(
+        row["adjusted_open"],
+        row["adjusted_high"],
+        row["adjusted_low"],
+        row["adjusted_close"],
+    )
+
+
+def test_adjusted_low_roundoff_does_not_cross_exact_close() -> None:
+    target = date(2026, 8, 27)
+    raw_close = 1.05
+    adjusted_close = 0.8505
+    assert raw_close * (adjusted_close / raw_close) > adjusted_close
+    payload = pd.DataFrame(
+        {
+            ("AAPL", "Open"): [1.055],
+            ("AAPL", "High"): [1.06],
+            ("AAPL", "Low"): [raw_close],
+            ("AAPL", "Close"): [raw_close],
+            ("AAPL", "Adj Close"): [adjusted_close],
+            ("AAPL", "Volume"): [1000.0],
+        },
+        index=pd.to_datetime([target]),
+    )
+    payload.columns = pd.MultiIndex.from_tuples(payload.columns)
+
+    rows, errors = _rows_from_download(
+        payload,
+        canonical_batch=["AAPL"],
+        provider_batch=["AAPL"],
+        canonical_by_provider={"AAPL": "AAPL"},
+        sessions=[target],
+        target_session=target,
+        run_id="roundoff-test",
+        batch_id="batch_0001",
+        provider_version="test",
+        capture_started_utc="2026-08-27T22:00:00Z",
+        capture_finished_utc="2026-08-27T22:00:01Z",
+    )
+
+    assert errors == []
+    assert rows[0]["adjusted_low"] == adjusted_close
+    assert _valid_ohlc(
+        rows[0]["adjusted_open"],
+        rows[0]["adjusted_high"],
+        rows[0]["adjusted_low"],
+        rows[0]["adjusted_close"],
+    )
+
+
+def test_roundoff_rows_survive_full_capture_and_strict_verify(tmp_path: Path) -> None:
+    universe = _universe(tmp_path, ["AAPL"])
+
+    class RoundoffDownload(FakeDailyDownload):
+        def __call__(self, tickers: list[str], **kwargs: Any) -> pd.DataFrame:
+            frame = super().__call__(tickers, **kwargs)
+            for symbol in tickers:
+                frame[(symbol, "Open")] = 1.00
+                frame[(symbol, "High")] = 1.01
+                frame[(symbol, "Low")] = 0.99
+                frame[(symbol, "Close")] = 1.01
+                frame[(symbol, "Adj Close")] = 0.8585
+            return frame
+
+    summary = _run(tmp_path, universe, RoundoffDownload())
+    report = verify_daily_prices(
+        tmp_path / "archive",
+        universe,
+        TARGET,
+        now_utc=AFTER_CLOSE,
+    )
+
+    assert summary["ok"] is True
+    assert report["ok"] is True, report["errors"]
+    assert report["coverage"]["ratio"] == 1.0
+
+
 def test_capture_retries_a_missing_target_serially_and_verifies(tmp_path: Path) -> None:
     universe = _universe(tmp_path, ["MSFT", "AAPL"])
     fetcher = FakeDailyDownload(omit_first_target="AAPL")
@@ -319,6 +436,7 @@ def test_verify_rejects_adjusted_price_tampering(tmp_path: Path) -> None:
 
     assert report["ok"] is False
     assert any("output" in error and "mismatch" in error for error in report["errors"])
+    assert any("invalid adjusted OHLC envelope" in error for error in report["errors"])
     assert any("adjustment-factor mismatch" in error for error in report["errors"])
 
 
