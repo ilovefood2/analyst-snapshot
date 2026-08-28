@@ -28,7 +28,7 @@ from analyst_snapshot.price_recovery import (
 from analyst_snapshot.storage import dataset_path, write_parquet
 
 SESSION_DATE = "2026-08-27"
-POST_CLOSE = "2026-08-27T21:00:00Z"
+POST_CLOSE = "2026-08-27T21:00:00.941609Z"
 SEALED_AT = datetime(2026, 8, 28, 1, tzinfo=UTC)
 
 EXPECTED_BUNDLE_KEYS = {
@@ -205,6 +205,8 @@ def test_price_finalizer_seals_exact_independent_two_file_contract(
     }
     assert manifest["files"][1]["dataset"] == DAILY_PRICES_DATASET
     assert manifest["files"][1]["pit_column"] == "available_at_utc"
+    assert manifest["files"][1]["pit_min_utc"] == POST_CLOSE
+    assert manifest["files"][1]["pit_max_utc"] == POST_CLOSE
     assert full_sentinel.read_text(encoding="utf-8") == "full-sentinel"
     assert price_recovery_manifest_path(archive, SESSION_DATE).is_file()
 
@@ -341,6 +343,7 @@ def test_publish_price_bundle_uses_distinct_generation_and_price_ready_last(
     assert ready["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     assert ready["manifest_identity_sha256"] == manifest["manifest_identity_sha256"]
     assert ready["files_count"] == 2
+    assert "." not in ready["published_at_utc"]
     assert ready["ready_identity_sha256"] == _identity_sha256(
         ready,
         self_hash_field="ready_identity_sha256",

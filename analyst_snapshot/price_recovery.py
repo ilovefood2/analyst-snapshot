@@ -545,8 +545,8 @@ def _price_parquet_evidence(
             "rows": rows,
             "schema_sha256": _schema_sha256(schema),
             "pit_column": "available_at_utc",
-            "pit_min_utc": _iso_utc(pit_min),
-            "pit_max_utc": _iso_utc(pit_max),
+            "pit_min_utc": _iso_utc_exact(pit_min),
+            "pit_max_utc": _iso_utc_exact(pit_max),
         }
     )
     return evidence
@@ -750,6 +750,12 @@ def _as_utc_value_error(value: datetime, role: str) -> datetime:
 
 def _iso_utc(value: datetime) -> str:
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _iso_utc_exact(value: datetime) -> str:
+    """Preserve evidence precision for consumers that bind the exact Parquet PIT range."""
+
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
