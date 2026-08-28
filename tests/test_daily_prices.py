@@ -15,6 +15,8 @@ from analyst_snapshot.daily_prices import (
     PRICE_SESSION_COUNT,
     UNADJUSTED_PRICE_BASIS,
     _price_sessions,
+    _provider_symbol,
+    _requested_symbols,
     _rows_from_download,
     _schema_sha256,
     _sha256_file,
@@ -33,6 +35,38 @@ from analyst_snapshot.storage import dataset_path, write_parquet
 
 TARGET = "2026-08-27"
 AFTER_CLOSE = datetime(2026, 8, 28, 1, 0, tzinfo=UTC)
+SWINGLAB_PRICE_SUPPLEMENT = {
+    "BETR",
+    "BOT",
+    "BXSL",
+    "BYND",
+    "CCXI",
+    "CVCO",
+    "DFNS",
+    "DXYZ",
+    "EQX",
+    "FCUV",
+    "GOF",
+    "GTE",
+    "IE",
+    "IMO",
+    "MPTI",
+    "NG",
+    "NHC",
+    "PAGP",
+    "PRK",
+    "PTY",
+    "RVII",
+    "SEB",
+    "SVM",
+    "TGB",
+    "UEC",
+    "UMAC",
+    "UTG",
+    "UUUU",
+    "VCX",
+    "WETO",
+}
 
 
 class FakeDailyDownload:
@@ -125,6 +159,26 @@ def _run(
         progress=lambda _payload: None,
         sleep_fn=lambda _seconds: None,
     )
+
+
+def test_tracked_universe_covers_swinglab_price_supplement_without_alias_collision() -> None:
+    universe_path = Path(__file__).resolve().parents[1] / "universe.txt"
+    universe = [
+        line.strip().upper()
+        for line in universe_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert universe == sorted(set(universe))
+    assert SWINGLAB_PRICE_SUPPLEMENT <= set(universe)
+    # SwingLab uses dot-class canonical names locally. Yahoo already has the exact economic
+    # securities under its hyphen aliases, so the producer must not request each provider code
+    # twice. The consumer owns the explicit BF.B/BRK.B recovery alias bridge.
+    assert {"BF-B", "BRK-B"} <= set(universe)
+    assert {"BF.B", "BRK.B"}.isdisjoint(universe)
+    requested = _requested_symbols(universe)
+    provider_symbols = [_provider_symbol(symbol) for symbol in requested]
+    assert len(provider_symbols) == len(set(provider_symbols))
 
 
 def test_schema_and_trend_anchor_contract_is_exact() -> None:

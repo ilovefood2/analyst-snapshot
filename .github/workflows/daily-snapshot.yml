@@ -53,6 +53,8 @@ jobs:
     timeout-minutes: 355
     env:
       SNAPSHOT_DIR: ./archive
+      # universe.txt includes the tracked SwingLab K185 price supplement. The collector also
+      # unions the fixed Trend anchors and fails on any canonical-to-Yahoo symbol collision.
       UNIVERSE_FILE: ./universe.txt
       LOG_DIR: ./logs
       SYMBOL_DELAY_SECONDS: "0.5"
