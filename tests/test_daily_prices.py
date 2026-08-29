@@ -94,7 +94,7 @@ class FakeDailyDownload:
             "actions": True,
             "threads": False,
             "progress": False,
-            "repair": False,
+            "repair": True,
             "group_by": "ticker",
         }
         fields = (

@@ -1,7 +1,7 @@
 # Runtime dependencies. Lower bounds only: the archive's column types are pinned in
 # analyst_snapshot/datasets.py (CORE_SCHEMAS), so a pandas or pyarrow upgrade cannot silently
 # change the Parquet schema of new partitions.
-yfinance>=0.2.50
+yfinance[repair]>=1.7.0
 pandas>=2.2
 pyarrow>=15
 pandas-market-calendars>=4.4
