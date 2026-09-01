@@ -1,0 +1,86 @@
+{
+  "analyst_snapshot_version": "0.5.0",
+  "datasets": {
+    "analyst_price_targets": {
+      "path": "archive/analyst_price_targets/date=2026-08-31/data.parquet",
+      "rows_written": 3495,
+      "symbols_no_coverage": 22
+    },
+    "earnings": {
+      "path": "archive/earnings/date=2026-08-31/data.parquet",
+      "rows_written": 75200,
+      "symbols_no_coverage": 0
+    },
+    "estimates": {
+      "path": "archive/estimates/date=2026-08-31/data.parquet",
+      "rows_written": 52332,
+      "symbols_no_coverage": 60
+    },
+    "holders": {
+      "path": "archive/holders/date=2026-08-31/data.parquet",
+      "rows_written": 279716,
+      "symbols_no_coverage": 3
+    },
+    "profile": {
+      "path": "archive/profile/date=2026-08-31/data.parquet",
+      "rows_written": 3495,
+      "symbols_no_coverage": 0
+    },
+    "recommendations": {
+      "path": "archive/recommendations/date=2026-08-31/data.parquet",
+      "rows_written": 11969,
+      "symbols_no_coverage": 259
+    },
+    "shares_outstanding": {
+      "path": "archive/shares_outstanding/date=2026-08-31/data.parquet",
+      "rows_written": 471989,
+      "symbols_no_coverage": 26
+    },
+    "upgrades_downgrades": {
+      "path": "archive/upgrades_downgrades/date=2026-08-31/data.parquet",
+      "rows_written": 399228,
+      "symbols_no_coverage": 241
+    }
+  },
+  "events_added": 743,
+  "failures": [
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "A"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "BEAM"
+    },
+    {
+      "error": "['Earnings Date']",
+      "retry": "False",
+      "symbol": "LYG"
+    },
+    {
+      "error": "Failed to perform, curl: (16) . See https://curl.se/libcurl/c/libcurl-errors.html first for more details.",
+      "retry": "False",
+      "symbol": "SOLV"
+    }
+  ],
+  "finished_utc": "2026-09-01T03:07:44Z",
+  "package_versions": {
+    "pandas": "3.0.5",
+    "pandas-market-calendars": "5.4.0",
+    "pyarrow": "25.0.1",
+    "yfinance": "1.7.0"
+  },
+  "run_date": "2026-08-31",
+  "run_id": "run_20260901T013709Z",
+  "started_utc": "2026-09-01T01:37:09Z",
+  "symbols_attempted": 3499,
+  "symbols_retried": [
+    "A",
+    "BEAM",
+    "LYG",
+    "SOLV"
+  ],
+  "symbols_skipped_resume": 0
+}
