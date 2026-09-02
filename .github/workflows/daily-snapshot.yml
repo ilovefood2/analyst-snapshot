@@ -2,10 +2,8 @@ name: Daily analyst snapshot
 
 on:
   schedule:
-    # GitHub cron is UTC. These are the EDT and EST representations of 18:30 New York time.
-    # Both fire on weekdays; schedule-gate authorizes exactly one lane and rejects market holidays.
-    - cron: "30 22 * * 1-5"
-    - cron: "30 23 * * 1-5"
+    - cron: "30 18 * * 1-5"
+      timezone: "America/New_York"
   workflow_dispatch:
     inputs:
       force:

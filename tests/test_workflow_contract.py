@@ -44,11 +44,13 @@ def test_manual_fresh_workflow_isolates_preclose_partitions() -> None:
     assert "Requested run_date is not a completed XNYS session" in workflow
 
 
-def test_workflow_uses_dst_safe_1830_new_york_schedule_gate() -> None:
+def test_workflow_uses_one_timezone_aware_1830_new_york_schedule() -> None:
     workflow = _workflow()
 
-    assert workflow.count('- cron: "30 22 * * 1-5"') == 1
-    assert workflow.count('- cron: "30 23 * * 1-5"') == 1
+    assert workflow.count('- cron: "30 18 * * 1-5"') == 1
+    assert workflow.count('timezone: "America/New_York"') == 1
+    assert 'cron: "30 22 * * 1-5"' not in workflow
+    assert 'cron: "30 23 * * 1-5"' not in workflow
     assert 'cron: "0 2 * * *"' not in workflow
     assert "EVENT_NAME: ${{ github.event_name }}" in workflow
     assert "EVENT_SCHEDULE: ${{ github.event.schedule || '' }}" in workflow

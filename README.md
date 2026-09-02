@@ -213,16 +213,16 @@ the close and archives the session that just ended, so the checked date defaults
 date the job fires on. Pass `--offset-days 1` for a morning-after schedule that archives the
 previous day instead.
 
-The GitHub workflow separately gates its two UTC cron lanes so exactly one represents 18:30 New
-York time. For example, this authorizes the EDT lane on a summer trading day:
+The GitHub workflow uses one timezone-aware 18:30 New York cron. The gate validates that schedule
+and rejects market holidays. For example:
 
 ```bash
 python -m analyst_snapshot schedule-gate \
   --event-name schedule \
-  --event-schedule "30 22 * * 1-5"
+  --event-schedule "30 18 * * 1-5"
 ```
 
-`workflow_dispatch` bypasses only this cron-lane gate; the completed-session publication checks
+`workflow_dispatch` bypasses only this schedule gate; the completed-session publication checks
 still apply.
 
 ## Verify
@@ -301,12 +301,12 @@ Actions.
 
 What it does:
 
-- Runs on weekdays at 18:30 New York time. GitHub Actions receives two UTC cron events, 22:30 for
-  EDT and 23:30 for EST; a fail-closed gate uses the literal `github.event.schedule` value and the
-  New York UTC offset to authorize exactly one. It does not require the delayed runner's actual
-  start minute to match the cron minute. It resolves the latest weekday occurrence of that literal
-  cron, so a delayed Friday runner still keeps Friday after New York midnight; that occurrence date
-  must itself be an NYSE session, preventing a holiday run from republishing the prior session.
+- Runs once on weekdays at 18:30 with `timezone: America/New_York`, so DST does not create a second
+  cron event. A fail-closed gate validates the literal `github.event.schedule` value. It does not
+  require the delayed runner's actual start minute to match the cron minute. It resolves the latest
+  18:30 New York weekday occurrence, so a delayed Friday runner still keeps Friday after New York
+  midnight; that occurrence date must itself be an NYSE session, preventing a holiday run from
+  republishing the prior session.
 - After the schedule gate passes, the partition date is resolved from the latest NYSE
   `market_close <= actual_start_time`. Manual dispatch bypasses the cron gate but never the
   completed-session publication gate.

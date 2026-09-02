@@ -5,8 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from analyst_snapshot.trading_calendar import (
-    DAILY_1830_EDT_CRON,
-    DAILY_1830_EST_CRON,
+    DAILY_1830_NEW_YORK_CRON,
     completed_session_report,
     resolve_latest_completed_nyse_session,
     schedule_gate_report,
@@ -110,25 +109,20 @@ def test_completed_session_resolver_rejects_naive_now() -> None:
         resolve_latest_completed_nyse_session(datetime(2026, 8, 27, 21, 0))
 
 
-def test_summer_schedule_gate_allows_only_the_edt_lane_after_a_runner_delay() -> None:
-    # The 22:30Z event did not get a runner until 23:55Z. The literal event schedule, rather than
-    # the actual start minute, still authorizes the intended 18:30 EDT lane.
+def test_summer_timezone_schedule_survives_a_runner_delay() -> None:
     now = datetime(2026, 8, 27, 23, 55, tzinfo=UTC)
 
-    active = schedule_gate_report("schedule", DAILY_1830_EDT_CRON, now=now)
-    duplicate = schedule_gate_report("schedule", DAILY_1830_EST_CRON, now=now)
+    active = schedule_gate_report("schedule", DAILY_1830_NEW_YORK_CRON, now=now)
 
     assert active.run is True
     assert active.reason == "authorized_1830_new_york_lane"
-    assert active.expected_schedule == DAILY_1830_EDT_CRON
-    assert duplicate.run is False
-    assert duplicate.reason == "inactive_dst_lane"
+    assert active.expected_schedule == DAILY_1830_NEW_YORK_CRON
 
 
 def test_delayed_friday_cron_keeps_its_occurrence_date_after_new_york_midnight() -> None:
     report = schedule_gate_report(
         "schedule",
-        DAILY_1830_EDT_CRON,
+        DAILY_1830_NEW_YORK_CRON,
         now=datetime(2026, 8, 29, 4, 10, tzinfo=UTC),
     )
 
@@ -137,40 +131,36 @@ def test_delayed_friday_cron_keeps_its_occurrence_date_after_new_york_midnight()
     assert report.reason == "authorized_1830_new_york_lane"
 
 
-def test_winter_schedule_gate_allows_only_the_est_lane() -> None:
+def test_winter_timezone_schedule_tracks_dst_without_a_second_lane() -> None:
     now = datetime(2026, 1, 8, 23, 45, tzinfo=UTC)
 
-    active = schedule_gate_report("schedule", DAILY_1830_EST_CRON, now=now)
-    duplicate = schedule_gate_report("schedule", DAILY_1830_EDT_CRON, now=now)
+    active = schedule_gate_report("schedule", DAILY_1830_NEW_YORK_CRON, now=now)
 
     assert active.run is True
-    assert active.expected_schedule == DAILY_1830_EST_CRON
-    assert duplicate.run is False
-    assert duplicate.reason == "inactive_dst_lane"
+    assert active.expected_schedule == DAILY_1830_NEW_YORK_CRON
 
 
 @pytest.mark.parametrize(
-    ("now", "expected_schedule"),
+    "now",
     [
-        (datetime(2026, 3, 9, 22, 45, tzinfo=UTC), DAILY_1830_EDT_CRON),
-        (datetime(2026, 11, 2, 23, 45, tzinfo=UTC), DAILY_1830_EST_CRON),
+        datetime(2026, 3, 9, 22, 45, tzinfo=UTC),
+        datetime(2026, 11, 2, 23, 45, tzinfo=UTC),
     ],
 )
 def test_schedule_gate_tracks_dst_on_the_first_weekday_after_each_transition(
     now: datetime,
-    expected_schedule: str,
 ) -> None:
-    report = schedule_gate_report("schedule", expected_schedule, now=now)
+    report = schedule_gate_report("schedule", DAILY_1830_NEW_YORK_CRON, now=now)
 
     assert report.run is True
-    assert report.expected_schedule == expected_schedule
+    assert report.expected_schedule == DAILY_1830_NEW_YORK_CRON
 
 
 def test_scheduled_holiday_is_rejected_instead_of_reusing_the_prior_session() -> None:
     # Friday July 3, 2026 is the observed Independence Day market holiday.
     report = schedule_gate_report(
         "schedule",
-        DAILY_1830_EDT_CRON,
+        DAILY_1830_NEW_YORK_CRON,
         now=datetime(2026, 7, 3, 22, 45, tzinfo=UTC),
     )
 
@@ -194,7 +184,7 @@ def test_unknown_schedule_and_event_fail_closed() -> None:
     now = datetime(2026, 8, 27, 22, 45, tzinfo=UTC)
 
     unknown_schedule = schedule_gate_report("schedule", "0 2 * * *", now=now)
-    unknown_event = schedule_gate_report("push", DAILY_1830_EDT_CRON, now=now)
+    unknown_event = schedule_gate_report("push", DAILY_1830_NEW_YORK_CRON, now=now)
 
     assert unknown_schedule.run is False
     assert unknown_schedule.reason == "unknown_schedule"
