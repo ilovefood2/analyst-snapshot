@@ -1,0 +1,94 @@
+{
+  "errors": [],
+  "free_public_sources_only": true,
+  "incremental_cash_usd": 0.0,
+  "network_workers": 1,
+  "participant_data_scope": {
+    "cboe_open_close": "not collected because it is paid proprietary data",
+    "cftc": "actual futures trader categories; weekly and publication-lagged",
+    "finra": "actual consolidated short-sale volume; not participant identity",
+    "occ": "actual options clearing account type; no buy/sell or open/close fields"
+  },
+  "run_date": "2026-09-01",
+  "run_id": "market_context_20260902T010243Z",
+  "schema": "analyst_snapshot_market_context_manifest_v1",
+  "snapshot_utc": "2026-09-02T01:02:43Z",
+  "sources": {
+    "cftc_tff_positioning": {
+      "captures": [
+        {
+          "encoding": "identity",
+          "path": "_market_context_sources/date=2026-09-01/cftc_tff_2026.zip",
+          "source_bytes": 474205,
+          "source_sha256": "0d3a015f09b47a050580e5653186466b156ad6b4729f41d75d76c7344d034dad",
+          "stored_bytes": 474205,
+          "stored_sha256": "0d3a015f09b47a050580e5653186466b156ad6b4729f41d75d76c7344d034dad"
+        }
+      ],
+      "output": {
+        "path": "cftc_tff_positioning/date=2026-09-01/data.parquet",
+        "rows": 2,
+        "sha256": "db5baef78f775070e9cc3e90841391c7c2c54beb23eb0d74df8487be7cbdd72f"
+      },
+      "source_date": "2026-08-25",
+      "status": "ok",
+      "url": "https://www.cftc.gov/files/dea/history/fut_fin_txt_2026.zip"
+    },
+    "finra_short_volume": {
+      "captures": [
+        {
+          "encoding": "gzip",
+          "path": "_market_context_sources/date=2026-09-01/finra_CNMSshvol20260901.txt.gz",
+          "source_bytes": 544940,
+          "source_sha256": "5e72ce85e33aba1de9565fbf3e2287f7b625865582df186541434c8bb1f26acf",
+          "stored_bytes": 210087,
+          "stored_sha256": "18073b726dec696e43b925e7e822cb6c4e42934f899cab909e5bf82b3b814330"
+        }
+      ],
+      "output": {
+        "path": "finra_short_volume/date=2026-09-01/data.parquet",
+        "rows": 12261,
+        "sha256": "5bbc4732c08faf602a5593ab830dfbb39eba1c4d00329470bb5697502252b710"
+      },
+      "source_date": "2026-09-01",
+      "status": "ok",
+      "url": "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20260901.txt"
+    },
+    "occ_account_volume": {
+      "captures": [
+        {
+          "encoding": "gzip",
+          "path": "_market_context_sources/date=2026-09-01/occ_QQQ_20260831.csv.gz",
+          "source_bytes": 4764,
+          "source_sha256": "0cb1a248f568a7864fccc57c3ab9ab6b72246d289d2ea6f9ca0da4e8357856b1",
+          "stored_bytes": 932,
+          "stored_sha256": "84d80bcfd4e204bf07da77425935783bb15e8868842d151bed47f8d1a33b8834"
+        },
+        {
+          "encoding": "gzip",
+          "path": "_market_context_sources/date=2026-09-01/occ_SPY_20260831.csv.gz",
+          "source_bytes": 4516,
+          "source_sha256": "1ed8cc58aa70e17a25fcd0ff81b365deb1f39b2dfcb63d345a4c19b34dfcfd75",
+          "stored_bytes": 934,
+          "stored_sha256": "389e68da325a44031fe908ecdc4527d4139450f655533ca7e822247c4772c527"
+        }
+      ],
+      "output": {
+        "path": "occ_account_volume/date=2026-09-01/data.parquet",
+        "rows": 256,
+        "sha256": "bec3a99c23ca69a5785e9af60b4b22ed99f440f1e2457227236eeef3582e1ebe"
+      },
+      "source_date": "2026-08-31",
+      "status": "ok",
+      "symbols": [
+        "QQQ",
+        "SPY"
+      ],
+      "urls": [
+        "https://marketdata.theocc.com/volume-query?reportDate=20260831&format=csv&volumeQueryType=O&symbolType=U&symbol=QQQ&reportType=D&accountType=ALL&productKind=OSTK&porc=BOTH",
+        "https://marketdata.theocc.com/volume-query?reportDate=20260831&format=csv&volumeQueryType=O&symbolType=U&symbol=SPY&reportType=D&accountType=ALL&productKind=OSTK&porc=BOTH"
+      ]
+    }
+  },
+  "status": "complete"
+}
