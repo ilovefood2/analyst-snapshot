@@ -425,6 +425,83 @@ def test_capture_retries_a_missing_target_serially_and_verifies(tmp_path: Path) 
     assert verified["coverage"]["anchor_usable_tail_symbols"] == len(TREND_PRICE_ANCHORS)
 
 
+@pytest.mark.parametrize("recover", [True, False])
+@pytest.mark.parametrize("bad_symbol", ["WLYB", "QQQ"])
+def test_invalid_yahoo_prices_retry_before_publication(
+    tmp_path: Path,
+    recover: bool,
+    bad_symbol: str,
+) -> None:
+    universe = _universe(tmp_path, ["WLYB", *(f"TEST{n:02d}" for n in range(20))])
+
+    class InvalidOpenDownload(FakeDailyDownload):
+        def __call__(self, tickers: list[str], **kwargs: Any) -> pd.DataFrame:
+            frame = super().__call__(tickers, **kwargs)
+            if bad_symbol in tickers and (not recover or len(self.calls) == 1):
+                # Actual WLYB 2026-09-04 anomaly: Open exceeded High even with repair=True.
+                for field, value in {
+                    "Open": 54.5,
+                    "High": 49.330002,
+                    "Low": 48.68,
+                    "Close": 48.68,
+                    "Adj Close": 48.68,
+                    "Volume": 955.0,
+                }.items():
+                    frame.loc[frame.index[-1], (bad_symbol, field)] = value
+            return frame
+
+    fetcher = InvalidOpenDownload()
+    summary = _run(tmp_path, universe, fetcher)
+    verified = verify_daily_prices(tmp_path / "archive", universe, TARGET, now_utc=AFTER_CLOSE)
+    assert len(fetcher.calls) == 2
+    assert fetcher.calls[1][0] == [bad_symbol]
+    assert summary["coverage"] == verified["coverage"]
+    frame = (
+        pq.ParquetFile(dataset_path(tmp_path / "archive", DAILY_PRICES_DATASET, TARGET))
+        .read()
+        .to_pandas()
+    )
+    assert frame["unadjusted_high"].ge(frame["unadjusted_open"]).all()
+    if recover:
+        assert summary["failures"] == []
+        assert verified["ok"] is True, verified["errors"]
+        assert len(frame.loc[frame["symbol"] == bad_symbol]) == PRICE_SESSION_COUNT
+    else:
+        assert bad_symbol not in set(frame["symbol"])
+        assert summary["coverage"]["failed_symbols"] == [bad_symbol]
+        assert summary["failures"][0]["symbol"] == bad_symbol
+        assert summary["failures"][0]["error_type"] == "InvalidPriceRow"
+        assert "invalid unadjusted OHLC envelope" in summary["failures"][0]["error_message"]
+        assert summary["failures"][0]["attempts"] == 2
+        if bad_symbol == "QQQ":
+            assert verified["ok"] is False
+            assert any("Trend anchors" in error for error in verified["errors"])
+        else:
+            assert verified["ok"] is True, verified["errors"]
+            assert verified["coverage"]["ratio"] >= 0.95
+    checkpoint = next((tmp_path / "archive/_daily_price_checkpoints").rglob("batch_*.json"))
+    audit = json.loads(checkpoint.read_text())
+    assert audit["individual_retry_symbols"] == 1
+    assert any("rejected Yahoo OHLC" in error for error in audit["parse_errors"])
+
+
+def test_other_invalid_price_fields_follow_the_same_retry_path(tmp_path: Path) -> None:
+    universe = _universe(tmp_path, ["AAPL"])
+
+    class InvalidVolumeDownload(FakeDailyDownload):
+        def __call__(self, tickers: list[str], **kwargs: Any) -> pd.DataFrame:
+            frame = super().__call__(tickers, **kwargs)
+            if len(self.calls) == 1:
+                frame.loc[frame.index[-1], ("AAPL", "Volume")] = -1.0
+            return frame
+
+    fetcher = InvalidVolumeDownload()
+    summary = _run(tmp_path, universe, fetcher)
+    assert fetcher.calls[1][0] == ["AAPL"]
+    assert summary["failures"] == []
+    assert verify_daily_prices(tmp_path / "archive", universe, TARGET, now_utc=AFTER_CLOSE)["ok"]
+
+
 def test_resume_reuses_hash_valid_atomic_batch_checkpoint(tmp_path: Path) -> None:
     universe = _universe(tmp_path, ["AAPL"])
     initial = FakeDailyDownload()

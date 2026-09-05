@@ -434,6 +434,19 @@ def run_daily_prices(
         write_parquet(parquet_path, frame, DAILY_PRICES_DATASET)
         succeeded = sorted(eligible_symbols)
         missing = [symbol for symbol in canonical_batch if symbol not in eligible_symbols]
+        for symbol in missing:
+            symbol_errors = [
+                error for error in parse_errors if error.startswith((f"{symbol} ", f"{symbol}:"))
+            ]
+            if symbol_errors and not any(item["symbol"] == symbol for item in failures):
+                failures.append(
+                    {
+                        "symbol": symbol,
+                        "error_type": "InvalidPriceRow",
+                        "error_message": "; ".join(dict.fromkeys(symbol_errors)),
+                        "attempts": 2,
+                    }
+                )
         batch_report = {
             "schema": DAILY_PRICE_CHECKPOINT_SCHEMA,
             "status": "complete",
@@ -983,6 +996,8 @@ def _rows_from_download(
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     allowed = set(sessions)
+    target_close = session_market_close_utc(target_session)
+    observed = _parse_utc(capture_finished_utc, "capture_finished_utc")
     for canonical, provider_symbol in zip(canonical_batch, provider_batch, strict=True):
         symbol_frame = _symbol_frame(payload, provider_symbol, len(provider_batch))
         if symbol_frame.empty:
@@ -1069,6 +1084,28 @@ def _rows_from_download(
                 "batch_id": batch_id,
                 "raw_record_sha256": _json_sha256(raw_identity),
             }
+            # Invalid rows must enter the existing incomplete-symbol retry/failure path, not
+            # count as complete solely because all dates exist. Use the publication validator
+            # so capture, resume and verification cannot disagree on price/PIT admissibility.
+            invalid_symbols: set[str] = set()
+            _verify_row_contract(
+                row,
+                target=target_session,
+                close=target_close,
+                observed=observed,
+                manifest_started=None,
+                manifest_finished=None,
+                canonical=canonical,
+                errors=errors,
+                invalid_symbols=invalid_symbols,
+            )
+            if invalid_symbols:
+                _append_error(
+                    errors,
+                    f"{canonical} {bar_session}: rejected Yahoo OHLC="
+                    f"{(raw_open, raw_high, raw_low, raw_close)} volume={volume}",
+                )
+                continue
             rows.append(row)
     rows.sort(key=lambda row: (str(row["canonical_symbol"]), row["bar_session"]))
     return rows, errors
