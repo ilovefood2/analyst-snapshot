@@ -16,6 +16,7 @@ from analyst_snapshot.storage import (
     dataset_path,
     utc_now_iso,
 )
+from analyst_snapshot.yahoo import DatasetFetchFailure
 
 MANIFEST_DIR_NAME = "_manifests"
 
@@ -138,7 +139,8 @@ def _fetch_and_store_symbol(
     retry: bool = False,
 ) -> bool:
     summary.symbols_attempted += 1
-    snapshot_utc = utc_now_iso()
+    if retry:
+        specs = [spec for spec in specs if symbol not in writer.known_symbols(spec.name)]
     try:
         payloads = fetcher.fetch_symbol(symbol, specs)
     except Exception as exc:  # noqa: BLE001
@@ -146,7 +148,29 @@ def _fetch_and_store_symbol(
         logger.write("symbol_failure", symbol=symbol, error=str(exc), retry=retry)
         return False
 
+    snapshot_utc = utc_now_iso()  # availability is after the requests, including any retry
+    complete = True
     for spec in specs:
+        failure = payloads.get(spec.name)
+        if isinstance(failure, DatasetFetchFailure) or spec.name not in payloads:
+            error = (
+                failure.message
+                if isinstance(failure, DatasetFetchFailure)
+                else "dataset result missing"
+            )
+            summary.failures.append(
+                {
+                    "symbol": symbol,
+                    "dataset": spec.name,
+                    "error": error,
+                    "retry": str(retry),
+                }
+            )
+            logger.write(
+                "dataset_failure", symbol=symbol, dataset=spec.name, error=error, retry=retry
+            )
+            complete = False
+            continue
         rows = parse_dataset_payload(spec.name, payloads.get(spec.name), symbol, snapshot_utc)
         no_coverage = not rows
         if no_coverage:
@@ -166,7 +190,7 @@ def _fetch_and_store_symbol(
             retry=retry,
         )
     writer.symbol_done()
-    return True
+    return complete
 
 
 def _symbol_is_complete(writer: SnapshotWriter, specs: list[DatasetSpec], symbol: str) -> bool:

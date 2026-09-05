@@ -15,7 +15,17 @@ def _universe(tmp_path: Path, symbols: list[str]) -> Path:
 
 def _write(archive: Path, date_str: str, rows: list[dict[str, object]]) -> None:
     for spec in DATASETS.values():
-        append_rows(dataset_path(archive, spec.name, date_str), rows, spec.name)
+        append_rows(
+            dataset_path(archive, spec.name, date_str),
+            [
+                {
+                    **row,
+                    **({"test_payload_value": 1.0} if not row.get("no_analyst_coverage") else {}),
+                }
+                for row in rows
+            ],
+            spec.name,
+        )
 
 
 def test_report_defaults_to_the_newest_partition_not_today(tmp_path: Path) -> None:
@@ -78,3 +88,34 @@ def test_truncated_log_lines_do_not_break_the_report(tmp_path: Path) -> None:
     report = coverage_report(archive, _universe(tmp_path, ["AAPL"]), logs)
 
     assert [record["symbol"] for record in report["failures"]] == ["AAPL"]
+
+
+def test_placeholders_are_reported_but_do_not_satisfy_data_coverage(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    _write(
+        archive,
+        "2026-07-03",
+        [
+            {"symbol": "AAPL", "snapshot_utc": "t"},
+            {"symbol": "MSFT", "snapshot_utc": "t", "no_analyst_coverage": True},
+        ],
+    )
+    universe = _universe(tmp_path, ["AAPL", "MSFT"])
+    report = coverage_report(archive, universe, tmp_path / "logs")
+    assert report["min_symbol_coverage_ratio"] == 0.5
+    assert report["datasets"]["recommendations"]["recorded_symbol_ratio"] == 1.0
+    assert report["datasets"]["recommendations"]["symbols_with_data"] == 1
+    assert report["datasets"]["recommendations"]["missing_symbols"] == ["MSFT"]
+    assert print_coverage_report(archive, universe, tmp_path / "logs", fail_under=0.95) == 1
+
+
+def test_unflagged_metadata_only_rows_are_not_data(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    for spec in DATASETS.values():
+        append_rows(
+            dataset_path(archive, spec.name, "2026-07-03"),
+            [{"symbol": "AAPL", "snapshot_utc": "t", "no_analyst_coverage": False}],
+            spec.name,
+        )
+    report = coverage_report(archive, _universe(tmp_path, ["AAPL"]), tmp_path / "logs")
+    assert report["min_symbol_coverage_ratio"] == 0.0

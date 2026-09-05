@@ -19,7 +19,9 @@ from analyst_snapshot.datasets import (
     CORE_SCHEMAS,
     DAILY_PRICES_DATASET,
     DATASETS,
+    DATASETS_BY_NAME,
     MARKET_CONTEXT_DATASETS,
+    data_bearing_symbols,
 )
 from analyst_snapshot.market_context import manifest_path as market_context_manifest_path
 from analyst_snapshot.market_context import verify_market_context
@@ -301,9 +303,15 @@ def _validate_parquet(
             raise RecoveryBundleError(f"{dataset} missing recovery column {required}")
 
     try:
-        table = pq.read_table(path, columns=["symbol", "dataset", pit_column])
+        table = pq.ParquetFile(path).read(
+            columns=None if dataset in DATASETS_BY_NAME else ["symbol", "dataset", pit_column]
+        )
         observed_datasets = set(table.column("dataset").drop_null().to_pylist())
-        symbols = set(table.column("symbol").drop_null().to_pylist())
+        symbols = (
+            data_bearing_symbols(table.to_pandas())
+            if dataset in DATASETS_BY_NAME
+            else set(table.column("symbol").drop_null().to_pylist())
+        )
         minimum = pc.min(table.column(pit_column)).as_py()
         maximum = pc.max(table.column(pit_column)).as_py()
     except (OSError, KeyError, pa.ArrowException) as exc:

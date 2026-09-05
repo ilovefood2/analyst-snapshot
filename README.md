@@ -183,8 +183,11 @@ python -m analyst_snapshot run --resume --run-date 2026-07-03
 Yahoo throttles aggressively. The app fetches serially, waits `SYMBOL_DELAY_SECONDS` between
 symbols, retries throttle-like failures with exponential backoff, pauses for 60 seconds or more
 after repeated failures, isolates per-symbol failures, and retries failed symbols once at the end.
-An empty response is treated as genuine "no coverage" after one retry rather than consuming the
-whole error budget, because a few hundred seconds of backoff per uncovered symbol adds up.
+The collector enables yfinance exception propagation during each serial symbol fetch. HTTP/auth
+errors enter the bounded retry path; they are never converted to "no coverage". Healthy datasets
+are retained while failed datasets are retried. An explicit feature-permission denial is recorded
+as a failure, not hammered repeatedly or bypassed. Only a successfully returned empty dataset may
+produce a no-coverage marker.
 
 A full run of about 3,465 symbols across all eight datasets takes roughly three to five hours
 depending on Yahoo behavior. The scheduled job gives the run step a 300-minute budget inside a
@@ -242,6 +245,12 @@ report:
 ```bash
 python -m analyst_snapshot verify --run-date 2026-08-18 --fail-under 0.95 --json-out verify.json
 ```
+
+`symbol_coverage_ratio` counts symbols with actual payload data. No-coverage placeholders and
+metadata-only rows do not satisfy `--fail-under`; `recorded_symbol_ratio` separately reports which
+symbols have any stored record. The full recovery sealer independently enforces the same data
+coverage rule before creating `_READY.json`. Genuine empty observations remain archived, but are
+not advertised as populated analyst data. The independent price package is unaffected.
 
 `--fail-under` exits non-zero when any dataset covers less than that fraction of the universe. The
 report also lists `newly_uncovered_symbols` — symbols that had coverage on the previous archived

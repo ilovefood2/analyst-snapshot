@@ -40,6 +40,15 @@ class BackoffPolicy:
         return delay + random.uniform(0, 0.25)
 
 
+@dataclass(frozen=True)
+class DatasetFetchFailure:
+    """A failed request is not an empty, successfully observed dataset."""
+
+    error_type: str
+    message: str
+    attempts: int
+
+
 class YahooAnalystFetcher:
     def __init__(
         self,
@@ -58,26 +67,48 @@ class YahooAnalystFetcher:
 
     def fetch_symbol(self, symbol: str, specs: Iterable[DatasetSpec]) -> dict[str, object]:
         specs_list = list(specs)
-        last_error: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            self._limiter.wait()
-            try:
-                ticker = yf.Ticker(symbol)
-                payloads = {spec.name: self._payload_for_spec(ticker, spec) for spec in specs_list}
-                if any(_has_payload(payload) for payload in payloads.values()):
-                    return payloads
-                if attempt >= self._max_empty_retries:
+        pending = specs_list
+        payloads: dict[str, object] = {}
+        # Supported yfinance setting: HTTP/parsing errors must reach our retry logic instead of
+        # becoming None. This collector is serial; restore the setting for unrelated callers.
+        previous_hide = yf.config.debug.hide_exceptions
+        yf.config.debug.hide_exceptions = False
+        try:
+            for attempt in range(self._max_retries + 1):
+                self._limiter.wait()
+                try:
+                    ticker = yf.Ticker(symbol)
+                except Exception as exc:
+                    if attempt >= self._max_retries or not _is_retryable_yahoo_error(exc):
+                        raise
+                    time.sleep(self._backoff_policy.delay_for_attempt(attempt))
+                    continue
+                retry_specs = []
+                for spec in pending:
+                    try:
+                        payloads[spec.name] = self._payload_for_spec(ticker, spec)
+                    except Exception as exc:  # noqa: BLE001 - retain independent healthy datasets
+                        payloads[spec.name] = DatasetFetchFailure(
+                            type(exc).__name__, _failure_message(exc), attempt + 1
+                        )
+                        if attempt < self._max_retries and _is_retryable_yahoo_error(exc):
+                            retry_specs.append(spec)
+                if retry_specs:
+                    pending = retry_specs
+                elif (
+                    attempt < self._max_empty_retries
+                    and not any(
+                        isinstance(value, DatasetFetchFailure) for value in payloads.values()
+                    )
+                    and not any(_has_payload(value) for value in payloads.values())
+                ):
+                    pending = specs_list
+                else:
                     return payloads
                 time.sleep(self._backoff_policy.delay_for_attempt(attempt))
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                if attempt >= self._max_retries or not _is_retryable_yahoo_error(exc):
-                    raise
-                time.sleep(self._backoff_policy.delay_for_attempt(attempt))
-
-        if last_error is not None:
-            raise last_error
-        return {}
+            return payloads
+        finally:
+            yf.config.debug.hide_exceptions = previous_hide
 
     @staticmethod
     def _payload_for_spec(ticker: yf.Ticker, spec: DatasetSpec) -> object:
@@ -88,13 +119,8 @@ class YahooAnalystFetcher:
 
 def _attribute_value(ticker: yf.Ticker, attribute: str) -> object:
     """Read a yfinance attribute, calling it when it is a getter such as get_shares_full."""
-    value = getattr(ticker, attribute, None)
-    if callable(value):
-        try:
-            return value()
-        except Exception:  # noqa: BLE001 - one missing table must not fail the whole symbol
-            return None
-    return value
+    value = getattr(ticker, attribute)
+    return value() if callable(value) else value
 
 
 def _has_payload(payload: object) -> bool:
@@ -116,8 +142,22 @@ def dataset_request_estimate(specs: Iterable[DatasetSpec]) -> int:
 
 
 def _is_retryable_yahoo_error(exc: Exception) -> bool:
+    text = (str(exc) + " " + str(getattr(getattr(exc, "response", None), "text", ""))).lower()
+    if "unable to access this feature" in text:
+        return False  # a permission denial is not fixed by repeated anonymous requests
     status = getattr(getattr(exc, "response", None), "status_code", None)
     if status in {401, 429, 999}:
         return True
-    text = str(exc).lower()
     return any(token in text for token in ("401", "429", "999", "too many", "rate limit"))
+
+
+def _failure_message(exc: Exception) -> str:
+    """Record the reason without persisting request URLs, cookies or crumb values."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    text = (str(exc) + " " + str(getattr(response, "text", ""))).lower()
+    if "invalid crumb" in text:
+        return "Yahoo HTTP 401: Invalid Crumb"
+    if "unable to access this feature" in text:
+        return "Yahoo feature access denied"
+    return f"Yahoo HTTP {status}" if status is not None else f"Yahoo {type(exc).__name__}"

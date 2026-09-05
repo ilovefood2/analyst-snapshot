@@ -499,6 +499,29 @@ def no_coverage_row(dataset_name: str, symbol: str, snapshot_utc: str) -> dict[s
     }
 
 
+def data_bearing_symbols(frame: pd.DataFrame) -> set[str]:
+    """Count actual payload rows, not placeholders or metadata-only rows."""
+    if frame.empty or "symbol" not in frame:
+        return set()
+    if "no_analyst_coverage" in frame:
+        frame = frame.loc[~frame["no_analyst_coverage"].fillna(False).astype(bool)]
+    metadata = set(_COMMON_COLUMNS) | {
+        "index",
+        "date",
+        "period",
+        "as_of_date",
+        "estimate_table",
+        "earnings_table",
+        "holders_table",
+    }
+    fields = [column for column in frame if column not in metadata]
+    if not fields:
+        return set()
+    has_data = frame[fields].replace("", pd.NA).notna().any(axis=1)
+    frame = frame.loc[has_data]
+    return set(frame["symbol"].dropna().astype(str))
+
+
 def rows_from_payload(payload: object) -> list[dict[str, Any]]:
     if payload is None:
         return []

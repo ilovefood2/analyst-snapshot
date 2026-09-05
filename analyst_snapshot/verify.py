@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from analyst_snapshot.datasets import DATASETS
+from analyst_snapshot.datasets import DATASETS, data_bearing_symbols
 from analyst_snapshot.runner import read_universe
 from analyst_snapshot.storage import dataset_path, partition_paths, read_parquet_or_empty
 
@@ -58,15 +58,20 @@ def coverage_report(
         previous_symbols = _symbols(previous_df)
         no_coverage = _no_coverage_symbols(today_df)
         previous_no_coverage = _no_coverage_symbols(previous_df)
-        missing = expected - today_symbols
+        data_symbols = data_bearing_symbols(today_df)
+        missing = expected - data_symbols
         # Yahoo answering "no coverage" for a symbol that had coverage the day before is the
         # signature of a throttled response being archived as real data.
         newly_uncovered = sorted((no_coverage - previous_no_coverage) & previous_symbols)
-        ratio = len(today_symbols & expected) / len(expected) if expected else 0.0
+        ratio = len(data_symbols & expected) / len(expected) if expected else 0.0
         ratios.append(ratio)
 
         report["datasets"][spec.name] = {
             "symbol_coverage_ratio": round(ratio, 4),
+            "symbols_with_data": len(data_symbols & expected),
+            "recorded_symbol_ratio": len(today_symbols & expected) / len(expected)
+            if expected
+            else 0.0,
             "run_date_symbols_snapshotted": len(today_symbols),
             "run_date_rows": int(len(today_df)),
             "compare_date_symbols_snapshotted": len(previous_symbols),
@@ -126,7 +131,11 @@ def _recent_failures(logs_dir: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 # A run killed mid-write leaves a partial final line; it must not break verify.
                 continue
-            if isinstance(record, dict) and record.get("event") in {"failure", "symbol_failure"}:
+            if isinstance(record, dict) and record.get("event") in {
+                "failure",
+                "symbol_failure",
+                "dataset_failure",
+            }:
                 failures.append(record)
     return failures[-100:]
 

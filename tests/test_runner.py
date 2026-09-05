@@ -9,6 +9,7 @@ from analyst_snapshot.datasets import DatasetSpec
 from analyst_snapshot.logging_utils import JsonlLogger
 from analyst_snapshot.runner import run_snapshot
 from analyst_snapshot.storage import read_parquet_or_empty, read_rating_events_index
+from analyst_snapshot.yahoo import DatasetFetchFailure
 
 
 class FakeFetcher:
@@ -70,6 +71,62 @@ def test_no_coverage_marker_enables_resume(tmp_path: Path) -> None:
     )
 
     assert fetcher.calls == 1
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_dataset_failure_is_not_a_placeholder_and_other_datasets_are_preserved(
+    tmp_path: Path,
+    recover: bool,
+) -> None:
+    calls = []
+
+    class PartialFetcher:
+        def fetch_symbol(self, symbol, specs):
+            specs = list(specs)
+            calls.append([spec.name for spec in specs])
+            return {
+                spec.name: (
+                    DatasetFetchFailure("HTTPError", "Yahoo HTTP 401", 5)
+                    if spec.name == "analyst_price_targets" and (len(calls) == 1 or not recover)
+                    else [{"mean": 100.0}]
+                )
+                for spec in specs
+            }
+
+    archive = tmp_path / "archive"
+    summary = run_snapshot(
+        archive,
+        PartialFetcher(),
+        ["a", "b"],
+        ["AAPL"],
+        JsonlLogger(tmp_path / "logs", "test"),
+        run_date="2026-07-04",
+    )
+    assert calls == [["recommendations", "analyst_price_targets"], ["analyst_price_targets"]]
+    assert len(read_parquet_or_empty(archive / "recommendations/date=2026-07-04/data.parquet")) == 1
+    assert not summary.no_coverage
+    assert all(item["dataset"] == "analyst_price_targets" for item in summary.failures)
+    target_path = archive / "analyst_price_targets/date=2026-07-04/data.parquet"
+    assert target_path.exists() == recover
+
+
+def test_missing_dataset_result_is_a_failure_not_no_coverage(tmp_path: Path) -> None:
+    class MissingFetcher:
+        def fetch_symbol(self, symbol, specs):
+            return {}
+
+    archive = tmp_path / "archive"
+    summary = run_snapshot(
+        archive,
+        MissingFetcher(),
+        ["a"],
+        ["AAPL"],
+        JsonlLogger(tmp_path / "logs", "test"),
+        run_date="2026-07-04",
+    )
+    assert summary.failures
+    assert summary.no_coverage == {}
+    assert not (archive / "recommendations/date=2026-07-04/data.parquet").exists()
 
 
 class YahooShapedFetcher:

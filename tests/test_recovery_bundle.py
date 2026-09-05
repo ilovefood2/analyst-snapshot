@@ -42,6 +42,7 @@ def _candidate(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
                         "dataset": spec.name,
                         "run_id": "run_test",
                         "no_analyst_coverage": False,
+                        "test_payload_value": 1.0,
                     }
                 ]
             ),
@@ -195,6 +196,33 @@ def test_finalizer_seals_complete_hash_addressed_inventory(tmp_path: Path, monke
     )
     assert generation == "generation_test"
     assert len(publish_files) == len(manifest["files"])
+
+
+@pytest.mark.parametrize("flagged", [True, False])
+def test_full_ready_cannot_be_sealed_from_empty_placeholder_rows(
+    tmp_path: Path,
+    monkeypatch,
+    flagged: bool,
+) -> None:
+    archive, universe = _candidate(tmp_path, monkeypatch)
+    write_parquet(
+        dataset_path(archive, "recommendations", SESSION_DATE),
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "AAPL",
+                    "snapshot_utc": POST_CLOSE,
+                    "dataset": "recommendations",
+                    "run_id": "run_test",
+                    "no_analyst_coverage": flagged,
+                }
+            ]
+        ),
+        "recommendations",
+    )
+    with pytest.raises(RecoveryBundleError, match="recommendations coverage 0.000000"):
+        _seal(archive, universe)
+    assert not recovery_manifest_path(archive, SESSION_DATE).exists()
 
 
 def test_finalizer_rejects_preclose_rows(tmp_path: Path, monkeypatch) -> None:
