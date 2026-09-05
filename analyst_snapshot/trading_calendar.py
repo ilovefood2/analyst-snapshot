@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -10,11 +11,7 @@ import pandas_market_calendars as mcal
 
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 
-DAILY_1830_NEW_YORK_CRON = "30 18 * * 1-5"
-DAILY_1830_CRONS = frozenset((DAILY_1830_NEW_YORK_CRON,))
-DAILY_LOCAL_TIME = time(18, 30)
-
-# The scheduled job runs at 18:30 New York time, after the close of the session it archives, so the
+# The scheduled job runs after the close of the session it archives, so the
 # date to check is the New York date the job fires on. A morning-after schedule would use 1.
 DEFAULT_OFFSET_DAYS = 0
 
@@ -46,11 +43,11 @@ def schedule_gate_report(
     *,
     now: datetime | None = None,
 ) -> ScheduleGateReport:
-    """Authorize the timezone-aware 18:30 New York schedule.
+    """Authorize the actual timezone-aware weekday cron supplied by GitHub.
 
     GitHub can start a scheduled run late, but ``github.event.schedule`` remains the literal cron
     expression that triggered it. For scheduled events the literal cron and observed clock resolve
-    the most recent 18:30 New York weekday occurrence at or before runner start; its date remains
+    the most recent New York weekday occurrence at or before runner start; its date remains
     authoritative even when queue delay crosses midnight. A scheduled occurrence must describe an
     XNYS session, preventing a holiday trigger from republishing the prior completed session.
     """
@@ -77,7 +74,9 @@ def schedule_gate_report(
             reason="unsupported_event",
         )
 
-    if normalized_schedule not in DAILY_1830_CRONS:
+    try:
+        occurrence = _latest_weekday_cron_occurrence(observed, normalized_schedule)
+    except ValueError:
         return ScheduleGateReport(
             run=False,
             event_name=event_name,
@@ -86,9 +85,8 @@ def schedule_gate_report(
             reason="unknown_schedule",
         )
 
-    occurrence = _latest_weekday_cron_occurrence(observed, normalized_schedule)
     scheduled_new_york_date = occurrence.astimezone(NEW_YORK_TZ).date()
-    expected_schedule = DAILY_1830_NEW_YORK_CRON
+    expected_schedule = normalized_schedule
 
     if not is_nyse_trading_day(scheduled_new_york_date):
         return ScheduleGateReport(
@@ -100,21 +98,35 @@ def schedule_gate_report(
             expected_schedule=expected_schedule,
         )
 
+    if occurrence < session_market_close_utc(scheduled_new_york_date):
+        return ScheduleGateReport(
+            run=False,
+            event_name=event_name,
+            event_schedule=normalized_schedule,
+            new_york_date=scheduled_new_york_date.isoformat(),
+            reason="schedule_before_session_close",
+            expected_schedule=expected_schedule,
+        )
+
     return ScheduleGateReport(
         run=True,
         event_name=event_name,
         event_schedule=normalized_schedule,
         new_york_date=scheduled_new_york_date.isoformat(),
-        reason="authorized_1830_new_york_lane",
+        reason="authorized_new_york_weekday_schedule",
         expected_schedule=expected_schedule,
     )
 
 
 def _latest_weekday_cron_occurrence(observed: datetime, schedule: str) -> datetime:
-    if schedule != DAILY_1830_NEW_YORK_CRON:
-        raise ValueError(f"unknown 18:30 New York schedule: {schedule}")
+    # The workflow is the schedule authority; do not duplicate its clock in a Python allowlist.
+    match = re.fullmatch(r"(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+1-5", schedule)
+    if match is None:
+        raise ValueError(f"unsupported New York weekday schedule: {schedule}")
+    minute, hour = map(int, match.groups())
+    local_time = time(hour, minute)  # also rejects out-of-range cron fields
     local_date = observed.astimezone(NEW_YORK_TZ).date()
-    candidate = datetime.combine(local_date, DAILY_LOCAL_TIME, tzinfo=NEW_YORK_TZ)
+    candidate = datetime.combine(local_date, local_time, tzinfo=NEW_YORK_TZ)
     if candidate > observed:
         candidate -= timedelta(days=1)
     while candidate.weekday() >= 5:
@@ -129,7 +141,7 @@ def should_run_after_trading_day(
 ) -> ShouldRunReport:
     """Decide whether to snapshot, and for which trading date.
 
-    ``as_of_date`` defaults to the current New York calendar date, which makes an 18:30 ET
+    ``as_of_date`` defaults to the current New York calendar date, which makes an after-close ET
     schedule resolve the same-day session correctly across both UTC offsets.
     """
     effective_date = as_of_date or datetime.now(NEW_YORK_TZ).date()
@@ -259,7 +271,7 @@ def print_schedule_gate_report(
     event_schedule: str | None,
     github_output: str | None,
     now_utc_raw: str | None = None,
-) -> None:
+) -> ScheduleGateReport:
     now = datetime.fromisoformat(now_utc_raw.replace("Z", "+00:00")) if now_utc_raw else None
     report = schedule_gate_report(event_name, event_schedule, now=now)
     print(json.dumps(asdict(report), indent=2, sort_keys=True))
@@ -271,6 +283,7 @@ def print_schedule_gate_report(
             handle.write(f"new_york_date={report.new_york_date}\n")
             if report.expected_schedule:
                 handle.write(f"expected_schedule={report.expected_schedule}\n")
+    return report
 
 
 def print_should_run_report(

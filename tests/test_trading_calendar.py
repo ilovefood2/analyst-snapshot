@@ -4,14 +4,16 @@ from datetime import UTC, date, datetime
 
 import pytest
 
+from analyst_snapshot.cli import main
 from analyst_snapshot.trading_calendar import (
-    DAILY_1830_NEW_YORK_CRON,
     completed_session_report,
     resolve_latest_completed_nyse_session,
     schedule_gate_report,
     session_market_close_utc,
     should_run_after_trading_day,
 )
+
+SCHEDULE = "30 17 * * 1-5"
 
 
 def test_evening_run_archives_the_session_that_just_closed() -> None:
@@ -109,35 +111,36 @@ def test_completed_session_resolver_rejects_naive_now() -> None:
         resolve_latest_completed_nyse_session(datetime(2026, 8, 27, 21, 0))
 
 
-def test_summer_timezone_schedule_survives_a_runner_delay() -> None:
+@pytest.mark.parametrize("schedule", [SCHEDULE, "30 18 * * 1-5", "15 19 * * 1-5"])
+def test_summer_timezone_schedule_survives_a_runner_delay(schedule: str) -> None:
     now = datetime(2026, 8, 27, 23, 55, tzinfo=UTC)
 
-    active = schedule_gate_report("schedule", DAILY_1830_NEW_YORK_CRON, now=now)
+    active = schedule_gate_report("schedule", schedule, now=now)
 
     assert active.run is True
-    assert active.reason == "authorized_1830_new_york_lane"
-    assert active.expected_schedule == DAILY_1830_NEW_YORK_CRON
+    assert active.reason == "authorized_new_york_weekday_schedule"
+    assert active.expected_schedule == schedule
 
 
 def test_delayed_friday_cron_keeps_its_occurrence_date_after_new_york_midnight() -> None:
     report = schedule_gate_report(
         "schedule",
-        DAILY_1830_NEW_YORK_CRON,
+        SCHEDULE,
         now=datetime(2026, 8, 29, 4, 10, tzinfo=UTC),
     )
 
     assert report.run is True
     assert report.new_york_date == "2026-08-28"
-    assert report.reason == "authorized_1830_new_york_lane"
+    assert report.reason == "authorized_new_york_weekday_schedule"
 
 
 def test_winter_timezone_schedule_tracks_dst_without_a_second_lane() -> None:
     now = datetime(2026, 1, 8, 23, 45, tzinfo=UTC)
 
-    active = schedule_gate_report("schedule", DAILY_1830_NEW_YORK_CRON, now=now)
+    active = schedule_gate_report("schedule", SCHEDULE, now=now)
 
     assert active.run is True
-    assert active.expected_schedule == DAILY_1830_NEW_YORK_CRON
+    assert active.expected_schedule == SCHEDULE
 
 
 @pytest.mark.parametrize(
@@ -150,17 +153,17 @@ def test_winter_timezone_schedule_tracks_dst_without_a_second_lane() -> None:
 def test_schedule_gate_tracks_dst_on_the_first_weekday_after_each_transition(
     now: datetime,
 ) -> None:
-    report = schedule_gate_report("schedule", DAILY_1830_NEW_YORK_CRON, now=now)
+    report = schedule_gate_report("schedule", SCHEDULE, now=now)
 
     assert report.run is True
-    assert report.expected_schedule == DAILY_1830_NEW_YORK_CRON
+    assert report.expected_schedule == SCHEDULE
 
 
 def test_scheduled_holiday_is_rejected_instead_of_reusing_the_prior_session() -> None:
     # Friday July 3, 2026 is the observed Independence Day market holiday.
     report = schedule_gate_report(
         "schedule",
-        DAILY_1830_NEW_YORK_CRON,
+        SCHEDULE,
         now=datetime(2026, 7, 3, 22, 45, tzinfo=UTC),
     )
 
@@ -184,9 +187,54 @@ def test_unknown_schedule_and_event_fail_closed() -> None:
     now = datetime(2026, 8, 27, 22, 45, tzinfo=UTC)
 
     unknown_schedule = schedule_gate_report("schedule", "0 2 * * *", now=now)
-    unknown_event = schedule_gate_report("push", DAILY_1830_NEW_YORK_CRON, now=now)
+    unknown_event = schedule_gate_report("push", SCHEDULE, now=now)
 
     assert unknown_schedule.run is False
     assert unknown_schedule.reason == "unknown_schedule"
     assert unknown_event.run is False
     assert unknown_event.reason == "unsupported_event"
+
+
+@pytest.mark.parametrize(
+    "schedule", ["", "0 2 * * *", "60 17 * * 1-5", "30 24 * * 1-5", "30 15 * * 1-5"]
+)
+def test_invalid_or_preclose_schedule_fails_cli_instead_of_green_skips(schedule: str) -> None:
+    assert (
+        main(
+            [
+                "schedule-gate",
+                "--event-name",
+                "schedule",
+                "--event-schedule",
+                schedule,
+                "--now-utc",
+                "2026-09-04T23:13:13Z",
+            ]
+        )
+        == 2
+    )
+
+
+def test_holiday_is_still_a_successful_cli_noop() -> None:
+    assert (
+        main(
+            [
+                "schedule-gate",
+                "--event-name",
+                "schedule",
+                "--event-schedule",
+                SCHEDULE,
+                "--now-utc",
+                "2026-07-03T23:13:13Z",
+            ]
+        )
+        == 0
+    )
+
+
+def test_early_close_schedule_uses_actual_session_close() -> None:
+    report = schedule_gate_report(
+        "schedule", "30 14 * * 1-5", now=datetime(2026, 11, 27, 20, 0, tzinfo=UTC)
+    )
+    assert report.run is True
+    assert report.new_york_date == "2026-11-27"

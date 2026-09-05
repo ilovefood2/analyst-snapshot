@@ -176,7 +176,7 @@ def test_tracked_universe_covers_swinglab_price_supplement_without_alias_collisi
     ]
 
     assert universe == sorted(set(universe))
-    assert SWINGLAB_PRICE_SUPPLEMENT <= set(universe)
+    assert set(universe) >= SWINGLAB_PRICE_SUPPLEMENT
     # SwingLab uses dot-class canonical names locally. Yahoo already has the exact economic
     # securities under its hyphen aliases, so the producer must not request each provider code
     # twice. The consumer owns the explicit BF.B/BRK.B recovery alias bridge.

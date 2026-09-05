@@ -213,13 +213,15 @@ the close and archives the session that just ended, so the checked date defaults
 date the job fires on. Pass `--offset-days 1` for a morning-after schedule that archives the
 previous day instead.
 
-The GitHub workflow uses one timezone-aware 18:30 New York cron. The gate validates that schedule
-and rejects market holidays. For example:
+The GitHub workflow uses one timezone-aware 17:30 New York cron. The gate reads the actual
+trigger's weekday cron, checks the session close, and skips market holidays. Invalid or pre-close
+schedules exit nonzero, so configuration mistakes cannot report green while skipping uploads.
+For example:
 
 ```bash
 python -m analyst_snapshot schedule-gate \
   --event-name schedule \
-  --event-schedule "30 18 * * 1-5"
+  --event-schedule "30 17 * * 1-5"
 ```
 
 `workflow_dispatch` bypasses only this schedule gate; the completed-session publication checks
@@ -301,10 +303,11 @@ Actions.
 
 What it does:
 
-- Runs once on weekdays at 18:30 with `timezone: America/New_York`, so DST does not create a second
-  cron event. A fail-closed gate validates the literal `github.event.schedule` value. It does not
+- Runs once on weekdays at 17:30 with `timezone: America/New_York`, so DST does not create a second
+  cron event. The gate parses the literal `github.event.schedule` value instead of duplicating
+  the configured clock in Python. Unsupported or pre-close schedules fail explicitly. It does not
   require the delayed runner's actual start minute to match the cron minute. It resolves the latest
-  18:30 New York weekday occurrence, so a delayed Friday runner still keeps Friday after New York
+  configured New York weekday occurrence, so a delayed Friday runner still keeps Friday after New York
   midnight; that occurrence date must itself be an NYSE session, preventing a holiday run from
   republishing the prior session.
 - After the schedule gate passes, the partition date is resolved from the latest NYSE
@@ -475,7 +478,7 @@ launchctl load ~/Library/LaunchAgents/com.local.analyst-snapshot.plist
 ```
 
 The legacy template runs daily at 22:00 local time. It no longer matches the GitHub cloud schedule,
-which runs on weekdays at 18:30 New York time; do not install both as writers for the same archive.
+which runs on weekdays at 17:30 New York time; do not install both as writers for the same archive.
 
 Check loaded jobs:
 

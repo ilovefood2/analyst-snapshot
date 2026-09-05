@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from analyst_snapshot.cli import main
+
 
 def _workflow() -> str:
     return Path(".github/workflows/daily-snapshot.yml").read_text(encoding="utf-8")
@@ -44,10 +46,10 @@ def test_manual_fresh_workflow_isolates_preclose_partitions() -> None:
     assert "Requested run_date is not a completed XNYS session" in workflow
 
 
-def test_workflow_uses_one_timezone_aware_1830_new_york_schedule() -> None:
+def test_workflow_uses_one_timezone_aware_1730_new_york_schedule() -> None:
     workflow = _workflow()
 
-    assert workflow.count('- cron: "30 18 * * 1-5"') == 1
+    assert workflow.count('- cron: "30 17 * * 1-5"') == 1
     assert workflow.count('timezone: "America/New_York"') == 1
     assert 'cron: "30 22 * * 1-5"' not in workflow
     assert 'cron: "30 23 * * 1-5"' not in workflow
@@ -58,10 +60,27 @@ def test_workflow_uses_one_timezone_aware_1830_new_york_schedule() -> None:
     assert "GATED_DATE: ${{ steps.schedule_gate.outputs.new_york_date }}" in workflow
     assert 'session_arg="--session-date $GATED_DATE"' in workflow
 
-    gate = workflow.index("- name: Authorize 18:30 America/New_York schedule")
+    gate = workflow.index("- name: Authorize America/New_York weekday schedule")
     calendar = workflow.index("- name: Resolve latest completed XNYS session")
     assert gate < calendar
     assert "if: steps.schedule_gate.outputs.run == 'true'" in workflow[gate : calendar + 200]
+
+    # Execute the real gate using the actual workflow cron, reproducing the September incident.
+    cron = next(line.split('"')[1] for line in workflow.splitlines() if "- cron:" in line)
+    assert (
+        main(
+            [
+                "schedule-gate",
+                "--event-name",
+                "schedule",
+                "--event-schedule",
+                cron,
+                "--now-utc",
+                "2026-09-04T23:13:13Z",
+            ]
+        )
+        == 0
+    )
 
 
 def test_workflow_price_capture_is_serial_batched_and_not_used_for_symbol_smoke() -> None:

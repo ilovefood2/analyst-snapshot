@@ -217,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     schedule_gate_parser = subparsers.add_parser(
         "schedule-gate",
-        help="Authorize the active 18:30 America/New_York GitHub cron lane.",
+        help="Authorize the workflow's America/New_York weekday cron.",
     )
     schedule_gate_parser.add_argument("--event-name", required=True)
     schedule_gate_parser.add_argument("--event-schedule", default="")
@@ -244,13 +244,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "schedule-gate":
-        print_schedule_gate_report(
+        report = print_schedule_gate_report(
             args.event_name,
             args.event_schedule,
             args.github_output,
             now_utc_raw=args.now_utc,
         )
-        return 0
+        # A holiday is a normal no-op; a broken schedule must not turn skipped uploads green.
+        return 0 if report.run or report.reason == "new_york_date_was_not_trading_session" else 2
 
     config = load_config()
 
